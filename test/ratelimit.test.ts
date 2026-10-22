@@ -29,7 +29,7 @@ test('the limiter refuses past the limit and recovers when the window passes', a
 
 const store = await Store.open(':memory:');
 const server = createApp({
-  config: loadConfig({ AI_PROVIDER: 'mock', SESSION_SECRET: 'test-secret' }),
+  config: loadConfig({ AI_PROVIDER: 'mock', SESSION_SECRET: 'test-secret', ALLOW_SIGNUP: 'true' }),
   store,
   brain: new MockBrain(),
   limits: { email: { max: 3, windowMs: 60_000 }, address: { max: 12, windowMs: 60_000 } },
@@ -65,7 +65,7 @@ test('repeated wrong passwords lock that email, even for the right password, wit
 
 test('behind a trusted local proxy, each visitor is limited by their own address', async () => {
   const proxied = createApp({
-    config: loadConfig({ AI_PROVIDER: 'mock', SESSION_SECRET: 'test-secret', TRUST_PROXY: 'true' }),
+    config: loadConfig({ AI_PROVIDER: 'mock', SESSION_SECRET: 'test-secret', TRUST_PROXY: 'true', ALLOW_SIGNUP: 'true' }),
     store,
     brain: new MockBrain(),
     limits: { email: { max: 100, windowMs: 60_000 }, address: { max: 2, windowMs: 60_000 } },

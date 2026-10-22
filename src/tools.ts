@@ -488,5 +488,6 @@ export async function toolStates(
     description: t.description,
     enabled: isToolAllowed(t, settings),
     available: isToolAvailable(t, services),
+    needs: t.needs ?? null,
   }));
 }

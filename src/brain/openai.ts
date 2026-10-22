@@ -21,6 +21,10 @@ type WireMessage =
   | { role: 'tool'; tool_call_id: string; content: string };
 
 const TIMEOUT_MS = 60_000;
+/** A rate-limit wait this short is waited out, rather than shown to the person as an error. */
+const MAX_AUTO_WAIT_MS = 20_000;
+/** At most this many waits per brain call. */
+const MAX_RETRIES = 3;
 
 export class OpenAICompatibleBrain implements Brain {
   readonly name: string;
@@ -35,25 +39,34 @@ export class OpenAICompatibleBrain implements Brain {
   }
 
   async respond({ system, messages, tools }: BrainRequest): Promise<BrainReply> {
+    const request = JSON.stringify({
+      model: this.model,
+      messages: [{ role: 'system', content: system }, ...toOpenAI(messages)],
+      ...(tools.length > 0 && {
+        tools: tools.map((t) => ({
+          type: 'function',
+          function: { name: t.name, description: t.description, parameters: t.parameters },
+        })),
+      }),
+    });
+
     let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
-        body: JSON.stringify({
-          model: this.model,
-          messages: [{ role: 'system', content: system }, ...toOpenAI(messages)],
-          ...(tools.length > 0 && {
-            tools: tools.map((t) => ({
-              type: 'function',
-              function: { name: t.name, description: t.description, parameters: t.parameters },
-            })),
-          }),
-        }),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-    } catch {
-      throw new Error(`Could not reach ${this.service}. Check the server's internet connection.`);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        res = await fetch(`${this.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
+          body: request,
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+      } catch {
+        throw new Error(`Could not reach ${this.service}. Check the server's internet connection.`);
+      }
+      // Free tiers limit tokens per minute; a short wait is better than an error.
+      const wait = res.status === 429 ? retryAfterMs(res) : null;
+      if (wait === null || wait > MAX_AUTO_WAIT_MS || attempt >= MAX_RETRIES) break;
+      await res.body?.cancel();
+      await new Promise((resolve) => setTimeout(resolve, wait + 250));
     }
     if (!res.ok) throw new Error(await describeError(this.service, this.model, res));
 
@@ -95,6 +108,13 @@ export function toOpenAI(messages: ChatMessage[]): WireMessage[] {
         return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
     }
   });
+}
+
+/** How long a 429 asks us to wait: Retry-After in seconds, else Groq's "try again in 4.2s" text; null if unknown. */
+function retryAfterMs(res: Response): number | null {
+  const header = Number(res.headers.get('retry-after'));
+  if (Number.isFinite(header) && header >= 0 && res.headers.get('retry-after') !== null) return header * 1000;
+  return null;
 }
 
 /** Turns an error response into a sentence a person can act on. */

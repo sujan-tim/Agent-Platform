@@ -28,6 +28,9 @@ setting.
   reads the page, and works through it for you (clicks, typing, forms,
   moving between pages), asking before anything that sends, submits, buys or
   deletes. See [extension/README.md](extension/README.md).
+- **Private by default.** The sign-in page cannot create accounts. Admins
+  add people, or approve requests from an optional "Request access" form.
+  (`ALLOW_SIGNUP=true` reopens self-service company sign-up.)
 - **Companies and people.** Anyone can create a company account; its first
   person is the admin, who can add others.
 - **Chat with voice.** Type, or press the microphone and speak (Chrome or Edge).

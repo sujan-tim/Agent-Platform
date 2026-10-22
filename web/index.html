@@ -17,7 +17,19 @@
         <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
         <button type="submit">Sign in</button>
       </form>
-      <details>
+      <details id="request-access" hidden>
+        <summary>Need an account? Request access</summary>
+        <form id="request-form">
+          <p class="muted">An admin reviews every request. You can sign in once it is approved.</p>
+          <label>Your name <input name="name" autocomplete="name" required /></label>
+          <label>Work email <input name="email" type="email" autocomplete="email" required /></label>
+          <label>Choose a password (10+ characters) <input name="password" type="password" minlength="10" autocomplete="new-password" required /></label>
+          <label>Note for the admin (optional) <input name="note" placeholder="e.g. I'm on the sales team" /></label>
+          <button type="submit">Request access</button>
+        </form>
+      </details>
+      <p id="no-access-note" class="muted small-note" hidden>Need an account? Ask your company admin to add you.</p>
+      <details id="signup" hidden>
         <summary>New here? Create a company account</summary>
         <form id="signup-form">
           <label>Company name <input name="companyName" required /></label>
@@ -161,6 +173,11 @@
           <input name="sheet" placeholder="Google Sheet link or ID" required />
           <button type="submit">Connect</button>
         </form>
+
+        <h2>Access requests</h2>
+        <label class="muted"><input type="checkbox" id="access-toggle" /> Show "Request access" on the sign-in page (requests come to you for approval)</label>
+        <p id="access-note" class="muted"></p>
+        <div id="access-list"></div>
 
         <h2>Add a person</h2>
         <form id="user-form" class="inline">

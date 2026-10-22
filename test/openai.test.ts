@@ -63,8 +63,8 @@ test('a reply cut off at the length limit never runs its tool call', async () =>
 });
 
 test('rate limits and bad keys become messages a person can act on', async () => {
-  responses.push({ status: 429, body: { error: { message: 'Rate limit reached' } }, headers: { 'retry-after': '12' } });
-  await assert.rejects(brain.respond({ system: '', messages: [{ role: 'user', content: 'q' }], tools: [] }), /free limit.*12 seconds/);
+  responses.push({ status: 429, body: { error: { message: 'Rate limit reached' } }, headers: { 'retry-after': '120' } });
+  await assert.rejects(brain.respond({ system: '', messages: [{ role: 'user', content: 'q' }], tools: [] }), /free limit.*120 seconds/);
   responses.push({ status: 401, body: { error: { message: 'Invalid API Key' } } });
   await assert.rejects(brain.respond({ system: '', messages: [{ role: 'user', content: 'q' }], tools: [] }), /rejected the API key/);
   responses.push({ status: 404, body: { error: { message: 'The model `some-model` does not exist or you do not have access to it.' } } });
@@ -86,4 +86,18 @@ test('history: tool calls and their results map to the OpenAI format', () => {
       { role: 'assistant', content: 'done' },
     ],
   );
+});
+
+test('a short rate-limit wait is waited out and retried; a long one is reported', async () => {
+  responses.push(
+    { status: 429, body: { error: { message: 'Rate limit reached' } }, headers: { 'retry-after': '0' } },
+    { status: 200, body: { choices: [{ finish_reason: 'stop', message: { content: 'after waiting' } }] } },
+  );
+  const before = received.length;
+  const reply = await brain.respond({ system: '', messages: [{ role: 'user', content: 'q' }], tools: [] });
+  assert.equal(reply.text, 'after waiting');
+  assert.equal(received.length - before, 2, 'asked twice');
+
+  responses.push({ status: 429, body: { error: { message: 'Daily limit reached' } }, headers: { 'retry-after': '3600' } });
+  await assert.rejects(brain.respond({ system: '', messages: [{ role: 'user', content: 'q' }], tools: [] }), /free limit.*3600 seconds/);
 });

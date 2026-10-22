@@ -8,7 +8,7 @@ import { loadConfig } from '../src/config.ts';
 import { createApp } from '../src/server.ts';
 import { Store } from '../src/store.ts';
 
-const config = loadConfig({ AI_PROVIDER: 'mock', SESSION_SECRET: 'test-secret' });
+const config = loadConfig({ AI_PROVIDER: 'mock', SESSION_SECRET: 'test-secret', ALLOW_SIGNUP: 'true' });
 const store = await Store.open(':memory:');
 const server = createApp({ config, store, brain: new MockBrain() });
 let base = '';

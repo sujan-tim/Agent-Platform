@@ -23,6 +23,8 @@ async function api(path, options = {}) {
 }
 
 function showError(where, err) {
+  // The sign-in message area also shows a green notice after a request; an error turns it red again.
+  if (err) $(where).classList.replace('notice', 'error');
   $(where).textContent = err ? err.message || String(err) : '';
 }
 
@@ -35,8 +37,26 @@ async function boot() {
   } catch {
     $('#auth-view').hidden = false;
     $('#app-view').hidden = true;
+    // Offer only what this server allows: requesting access, creating a company, or neither.
+    const options = await api('/api/public').catch(() => ({ allowSignup: false, accessRequests: false }));
+    $('#request-access').hidden = !options.accessRequests;
+    $('#signup').hidden = !options.allowSignup;
+    $('#no-access-note').hidden = options.accessRequests || options.allowSignup;
   }
 }
+
+$('#request-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const result = await api('/api/access-requests', { method: 'POST', body: formData(e.target) });
+    e.target.reset();
+    $('#request-access').open = false;
+    $('#auth-error').className = 'notice';
+    $('#auth-error').textContent = result.message;
+  } catch (err) {
+    showError('#auth-error', err);
+  }
+});
 
 function formData(form) {
   return Object.fromEntries(new FormData(form).entries());
@@ -802,7 +822,7 @@ function renderTools(tools) {
     if (!tool.available) {
       const note = document.createElement('small');
       note.className = 'muted';
-      note.textContent = ' Not set up on this server (needs TAVILY_API_KEY).';
+      note.textContent = tool.needs === 'sheet' ? ' Connect a Google Sheet below to use it.' : ' Not set up on this server (needs TAVILY_API_KEY).';
       on.append(note);
     }
     tr.append(cell(tool.name), cell(tool.kind), cell(tool.description), on);
@@ -810,9 +830,82 @@ function renderTools(tools) {
   }
 }
 
+async function loadAccessRequests() {
+  const data = await api('/api/admin/access-requests');
+  const toggle = $('#access-toggle');
+  toggle.checked = data.enabled;
+  toggle.disabled = data.takenElsewhere;
+  $('#access-note').textContent = data.takenElsewhere ? 'Another company on this server receives access requests.' : '';
+  const list = $('#access-list');
+  list.replaceChildren();
+  if (data.enabled && data.requests.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = 'No requests waiting.';
+    list.append(empty);
+  }
+  for (const request of data.requests) {
+    const card = document.createElement('div');
+    card.className = 'change';
+    const head = document.createElement('div');
+    head.className = 'change-head';
+    const name = document.createElement('strong');
+    name.textContent = request.name;
+    const email = document.createElement('span');
+    email.className = 'muted';
+    email.textContent = ` ${request.email} · ${new Date(request.createdAt).toLocaleString()}`;
+    head.append(name, email);
+    card.append(head);
+    if (request.note) {
+      const note = document.createElement('div');
+      note.className = 'change-meta';
+      note.textContent = `“${request.note}”`;
+      card.append(note);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'inline request-actions';
+    const role = document.createElement('select');
+    role.setAttribute('aria-label', `Role for ${request.name}`);
+    for (const [value, label] of [['member', 'Member'], ['admin', 'Admin']]) role.append(new Option(label, value));
+    const approve = document.createElement('button');
+    approve.type = 'button';
+    approve.textContent = 'Approve';
+    const reject = document.createElement('button');
+    reject.type = 'button';
+    reject.className = 'secondary';
+    reject.textContent = 'Reject';
+    const decide = async (decision) => {
+      approve.disabled = reject.disabled = true;
+      try {
+        await api('/api/admin/access-requests/decide', { method: 'POST', body: { id: request.id, decision, role: role.value } });
+        await loadAdmin();
+      } catch (err) {
+        showError('#app-error', err);
+        approve.disabled = reject.disabled = false;
+      }
+    };
+    approve.addEventListener('click', () => decide('approve'));
+    reject.addEventListener('click', () => decide('reject'));
+    actions.append(role, approve, reject);
+    card.append(actions);
+    list.append(card);
+  }
+}
+
+$('#access-toggle').addEventListener('change', async (e) => {
+  try {
+    await api('/api/admin/access-requests', { method: 'PUT', body: { enabled: e.target.checked } });
+    await loadAccessRequests();
+  } catch (err) {
+    e.target.checked = !e.target.checked;
+    showError('#app-error', err);
+  }
+});
+
 async function loadAdmin() {
   try {
     await loadSheetStatus();
+    await loadAccessRequests();
     renderTools((await api('/api/admin/tools')).tools);
     const { entries } = await api('/api/admin/audit');
     const body = $('#audit-table tbody');

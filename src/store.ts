@@ -77,6 +77,16 @@ export interface SheetChange {
   note: string | null;
 }
 
+/** Someone asking to join a company from the sign-in page; an admin approves or rejects it. */
+export interface AccessRequest {
+  id: number;
+  name: string;
+  email: string;
+  note: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+}
+
 export interface ConversationSummary {
   id: string;
   /** The first question, shortened. */
@@ -183,6 +193,22 @@ CREATE TABLE IF NOT EXISTS sheet_changes (
   decided_at TEXT,
   note TEXT
 );
+CREATE TABLE IF NOT EXISTS server_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS access_requests (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  note TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+  created_at TEXT NOT NULL,
+  decided_by TEXT,
+  decided_at TEXT
+);
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -197,6 +223,7 @@ CREATE INDEX IF NOT EXISTS conversations_by_user ON conversations (tenant_id, us
 CREATE INDEX IF NOT EXISTS documents_by_tenant ON documents (tenant_id);
 CREATE INDEX IF NOT EXISTS chunks_by_document ON document_chunks (tenant_id, document_id, position);
 CREATE INDEX IF NOT EXISTS audit_by_tenant ON audit_log (tenant_id, id);
+CREATE INDEX IF NOT EXISTS access_requests_by_tenant ON access_requests (tenant_id, status, id);
 CREATE INDEX IF NOT EXISTS sheet_changes_by_status ON sheet_changes (tenant_id, status, id);
 `;
 
@@ -514,6 +541,75 @@ export class Store {
       [tenantId, userId],
     );
     return rows.map((r) => ({ text: r.text, createdAt: r.created_at }));
+  }
+
+  // ── Access requests ─────────────────────────────────────────────────────
+
+  /** The company that receives access requests from the sign-in page, if one does. */
+  async accessRequestsTenant(): Promise<string | undefined> {
+    const [row] = await this.db.query<{ value: string }>("SELECT value FROM server_settings WHERE key = 'access_requests_tenant'");
+    return row?.value;
+  }
+
+  /**
+   * Turns access requests on for a company (if no other company already
+   * receives them) or off. Returns false if another company has them.
+   */
+  async setAccessRequestsTenant(tenantId: string, enabled: boolean): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx.query<{ value: string }>("SELECT value FROM server_settings WHERE key = 'access_requests_tenant' FOR UPDATE");
+      if (row && row.value !== tenantId) return false;
+      if (enabled && !row) {
+        await tx.query("INSERT INTO server_settings (key, value) VALUES ('access_requests_tenant', $1)", [tenantId]);
+      } else if (!enabled && row) {
+        await tx.query("DELETE FROM server_settings WHERE key = 'access_requests_tenant'");
+      }
+      return true;
+    });
+  }
+
+  /** Records a request, replacing an earlier pending one from the same email. */
+  async createAccessRequest(tenantId: string, input: { name: string; email: string; passwordHash: string; note: string }): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx.query("DELETE FROM access_requests WHERE tenant_id = $1 AND email = $2 AND status = 'pending'", [tenantId, input.email.toLowerCase()]);
+      await tx.query(
+        `INSERT INTO access_requests (tenant_id, name, email, password_hash, note, status, created_at) VALUES ($1, $2, $3, $4, $5, 'pending', $6)`,
+        [tenantId, input.name, input.email.toLowerCase(), input.passwordHash, input.note, now()],
+      );
+    });
+  }
+
+  /** A pending request for this email, with its password hash, so sign-in can say it is waiting. */
+  async pendingAccessRequest(email: string): Promise<{ passwordHash: string } | undefined> {
+    const [row] = await this.db.query<{ password_hash: string }>(
+      "SELECT password_hash FROM access_requests WHERE email = $1 AND status = 'pending' ORDER BY id DESC LIMIT 1",
+      [email.toLowerCase()],
+    );
+    return row && { passwordHash: row.password_hash };
+  }
+
+  async listAccessRequests(tenantId: string, status: AccessRequest['status'] = 'pending'): Promise<AccessRequest[]> {
+    const rows = await this.db.query<Record<string, any>>(
+      'SELECT id, name, email, note, status, created_at FROM access_requests WHERE tenant_id = $1 AND status = $2 ORDER BY id DESC LIMIT 200',
+      [tenantId, status],
+    );
+    return rows.map((r) => ({ id: r.id, name: r.name, email: r.email, note: r.note, status: r.status, createdAt: r.created_at }));
+  }
+
+  /** Marks a pending request decided and returns it with its password hash; undefined if it is not pending here. */
+  async decideAccessRequest(
+    tenantId: string,
+    id: number,
+    userId: string,
+    status: 'approved' | 'rejected',
+  ): Promise<(AccessRequest & { passwordHash: string }) | undefined> {
+    const [row] = await this.db.query<Record<string, any>>(
+      `UPDATE access_requests SET status = $1, decided_by = $2, decided_at = $3
+       WHERE tenant_id = $4 AND id = $5 AND status = 'pending'
+       RETURNING id, name, email, note, status, created_at, password_hash`,
+      [status, userId, now(), tenantId, id],
+    );
+    return row && { id: row.id, name: row.name, email: row.email, note: row.note, status: row.status, createdAt: row.created_at, passwordHash: row.password_hash };
   }
 
   // ── The company sheet ───────────────────────────────────────────────────

@@ -23,6 +23,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Hidden means hidden, whatever display a class gives the element. */
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -536,3 +538,11 @@ button.secondary { background: var(--panel); color: var(--text); border: 1px sol
 .change-applied, .change-rejected, .change-failed { opacity: 0.75; }
 .change-failed .change-meta { color: var(--error); }
 .sheet-status p { margin: 0.3rem 0; }
+
+/* Sign-in page notices and access requests */
+.notice { color: #067647; min-height: 1.5em; }
+@media (prefers-color-scheme: dark) { .notice { color: #47cd89; } }
+.small-note { font-size: 0.85rem; margin-top: 1rem; }
+.request-actions { margin-top: 0.5rem; }
+.request-actions select { flex: 0 0 auto; width: auto; }
+#access-list { display: flex; flex-direction: column; gap: 0.6rem; }

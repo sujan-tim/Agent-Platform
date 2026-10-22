@@ -59,7 +59,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     database: env.DATABASE_URL ?? 'data/pglite',
     production,
     sessionSecret,
-    allowSignup: env.ALLOW_SIGNUP !== 'false',
+    // Off unless asked for: a company's platform is private by default, and people join by
+    // being added by an admin or by an access request an admin approves.
+    allowSignup: env.ALLOW_SIGNUP === 'true',
     trustProxy: parseTrustProxy(env.TRUST_PROXY),
     provider,
     ollamaUrl: env.OLLAMA_URL ?? 'http://localhost:11434',

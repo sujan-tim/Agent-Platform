@@ -154,6 +154,30 @@ export function createApp(deps: {
 
   type Handler = (ctx: Ctx) => Promise<unknown> | unknown;
   const routes: Record<string, Handler> = {
+    /** What the sign-in page offers, before anyone signs in. */
+    'GET /api/public': async () => ({
+      allowSignup: config.allowSignup,
+      accessRequests: !!(await store.accessRequestsTenant()),
+    }),
+
+    /** Someone asks to join; an admin of the receiving company approves or rejects it. */
+    'POST /api/access-requests': async (ctx) => {
+      limitAddress(ctx);
+      const tenantId = await store.accessRequestsTenant();
+      if (!tenantId) throw new HttpError(403, 'This site is not taking access requests. Ask your company admin to add you.');
+      const body = await readJson(ctx.req);
+      const name = text(body.name, 'Your name', 100);
+      const email = emailAddress(body.email);
+      const password = newPassword(body.password);
+      const note = typeof body.note === 'string' ? body.note.trim().slice(0, 500) : '';
+      // The same answer whether or not the email already has an account, so accounts cannot be discovered.
+      if (!(await store.findUserForLogin(email))) {
+        await store.createAccessRequest(tenantId, { name, email, passwordHash: hashPassword(password), note });
+        await store.audit(tenantId, null, 'access_requested', { email, name });
+      }
+      return { ok: true, message: 'Request sent. You can sign in once an admin approves it.' };
+    },
+
     'POST /api/signup': async (ctx) => {
       if (!config.allowSignup) throw new HttpError(403, 'Sign-up is turned off on this server.');
       limitAddress(ctx);
@@ -181,6 +205,11 @@ export function createApp(deps: {
       if (!found || !verifyPassword(String(body.password ?? ''), found.passwordHash)) {
         emailLimiter.record(email);
         if (found) await store.audit(found.tenantId, found.id, 'sign_in_failed');
+        // Only someone who knows the password they requested with learns that it is waiting.
+        const waiting = !found && (await store.pendingAccessRequest(email));
+        if (waiting && verifyPassword(String(body.password ?? ''), waiting.passwordHash)) {
+          throw new HttpError(403, 'Your access request is waiting for an admin to approve it.');
+        }
         throw new HttpError(401, 'Email or password is incorrect.');
       }
       emailLimiter.clear(email);
@@ -494,6 +523,46 @@ export function createApp(deps: {
       const user = await store.addUser(admin.tenantId, { email, name, role, passwordHash: hashPassword(password) });
       await store.audit(admin.tenantId, admin.id, 'user_added', { email, role });
       return publicUser(user, (await store.getTenant(admin.tenantId))?.name ?? '');
+    },
+
+    'GET /api/admin/access-requests': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      const receiver = await store.accessRequestsTenant();
+      return {
+        enabled: receiver === admin.tenantId,
+        // Another company on this server already receives them; only one can.
+        takenElsewhere: !!receiver && receiver !== admin.tenantId,
+        requests: await store.listAccessRequests(admin.tenantId),
+      };
+    },
+
+    'PUT /api/admin/access-requests': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      const body = await readJson(ctx.req);
+      if (typeof body.enabled !== 'boolean') throw new HttpError(400, '"enabled" must be true or false.');
+      if (!(await store.setAccessRequestsTenant(admin.tenantId, body.enabled))) {
+        throw new HttpError(409, 'Another company on this server already receives access requests.');
+      }
+      await store.audit(admin.tenantId, admin.id, 'access_requests_setting_changed', { enabled: body.enabled });
+      return { enabled: body.enabled };
+    },
+
+    'POST /api/admin/access-requests/decide': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      const body = await readJson(ctx.req);
+      const id = Number(body.id);
+      if (body.decision !== 'approve' && body.decision !== 'reject') throw new HttpError(400, '"decision" must be approve or reject.');
+      const role = body.role === 'admin' ? 'admin' : 'member';
+      const request = await store.decideAccessRequest(admin.tenantId, id, admin.id, body.decision === 'approve' ? 'approved' : 'rejected');
+      if (!request) throw new HttpError(404, 'That request is not waiting any more.');
+      if (body.decision === 'reject') {
+        await store.audit(admin.tenantId, admin.id, 'access_rejected', { email: request.email });
+        return { ok: true };
+      }
+      if (await store.findUserForLogin(request.email)) throw new HttpError(409, 'That email already has an account.');
+      await store.addUser(admin.tenantId, { email: request.email, name: request.name, role, passwordHash: request.passwordHash });
+      await store.audit(admin.tenantId, admin.id, 'access_approved', { email: request.email, role });
+      return { ok: true };
     },
 
     'GET /api/admin/audit': async (ctx) => {

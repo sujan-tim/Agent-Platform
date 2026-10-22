@@ -73,7 +73,9 @@ learned in training. With it, it can look things up on the web.
    `Agent Platform running`, the address at the top of the page
    (`https://agent-platform-xxxx.onrender.com`) is your site.
 
-Open it, create your company account, and share the link.
+Creating a company from the sign-in page is off by default, so the site stays
+private. To create the first (admin) account, add `ALLOW_SIGNUP` = `true` in
+Render's Environment, sign up once, then remove it (or set it to `false`).
 
 ## Afterwards
 
@@ -85,9 +87,11 @@ Open it, create your company account, and share the link.
   `DATABASE_URL='<Neon connection string>' npm start`. On start-up it copies the
   old `data/agent-platform.db` into the empty online database, then you can stop
   it. It never copies into a database that already has companies.
-- **Turning off sign-up** (invited people only): in Render, open the service →
-  **Environment**, add `ALLOW_SIGNUP` = `false`, and save. Admins can still add
-  people from the Admin tab.
+- **Who can get in.** Nobody can create an account from the sign-in page.
+  Admins add people under **Admin → Add a person**, or turn on **Admin →
+  Access requests**, which puts a "Request access" form on the sign-in page;
+  each request waits for an admin to approve (as Member or Admin) or reject
+  it.
 - **A better AI later.** Set `AI_PROVIDER` to `anthropic` and add
   `ANTHROPIC_API_KEY` in Render's Environment page. That one is paid.
 
