@@ -98,3 +98,17 @@ test('members cannot see or decide requests, and turning requests off hides the 
   assert.equal((await call('GET', '/api/public')).body.accessRequests, false);
   assert.equal((await call('POST', '/api/access-requests', { name: 'Cy', email: 'cy@x.test', password: 'cy password 12' })).status, 403);
 });
+
+test('on a server with one company, registering is on for it until its admin turns it off', async () => {
+  const solo = await Store.open(':memory:');
+  assert.equal(await solo.accessRequestsTenant(), undefined, 'no company yet');
+  const { tenant } = await solo.createTenantWithAdmin({ companyName: 'Solo', email: 'solo@s.test', name: 'Sol', passwordHash: 'x' });
+  assert.equal(await solo.accessRequestsTenant(), tenant.id);
+  // Remembered, so a second company appearing later does not switch it off.
+  await solo.createTenantWithAdmin({ companyName: 'Later', email: 'l@l.test', name: 'L', passwordHash: 'x' });
+  assert.equal(await solo.accessRequestsTenant(), tenant.id);
+  assert.equal(await solo.setAccessRequestsTenant(tenant.id, false), true);
+  assert.equal(await solo.accessRequestsTenant(), undefined, 'off stays off');
+  assert.equal(await solo.setAccessRequestsTenant(tenant.id, true), true);
+  assert.equal(await solo.accessRequestsTenant(), tenant.id);
+});

@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent Platform</title>
     <link rel="icon" href="data:," />
+    <meta name="color-scheme" content="dark light" />
+    <!-- Sets the theme before the page draws, so it never flashes the wrong one. -->
+    <script src="/theme.js"></script>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -18,14 +21,14 @@
         <button type="submit">Sign in</button>
       </form>
       <details id="request-access" hidden>
-        <summary>Need an account? Request access</summary>
+        <summary>New here? Register</summary>
         <form id="request-form">
-          <p class="muted">An admin reviews every request. You can sign in once it is approved.</p>
+          <p class="approval-note">An admin must approve your account before you can sign in. Once approved, sign in with the email and password you choose here.</p>
           <label>Your name <input name="name" autocomplete="name" required /></label>
-          <label>Work email <input name="email" type="email" autocomplete="email" required /></label>
+          <label>Email <input name="email" type="email" autocomplete="email" required /></label>
           <label>Choose a password (10+ characters) <input name="password" type="password" minlength="10" autocomplete="new-password" required /></label>
           <label>Note for the admin (optional) <input name="note" placeholder="e.g. I'm on the sales team" /></label>
-          <button type="submit">Request access</button>
+          <button type="submit">Register</button>
         </form>
       </details>
       <p id="no-access-note" class="muted small-note" hidden>Need an account? Ask your company admin to add you.</p>
@@ -44,29 +47,50 @@
 
     <!-- Signed in -->
     <div id="app-view" hidden>
-      <header class="topbar">
-        <strong id="company-name"></strong>
-        <nav>
-          <button class="tab active" data-tab="chat">Chat</button>
-          <button class="tab" data-tab="jarvis">Jarvis</button>
-          <button class="tab" data-tab="review" id="review-tab" hidden>Review <span id="review-count" class="badge" hidden></span></button>
-          <button class="tab" data-tab="documents">Documents</button>
-          <button class="tab admin-only" data-tab="admin">Admin</button>
+      <aside id="app-sidebar" class="app-sidebar" aria-label="Main menu">
+        <div class="brand">
+          <span class="logo" aria-hidden="true"></span>
+          <span class="brand-text"><strong id="company-name"></strong><small>Agent Platform</small></span>
+        </div>
+        <button type="button" id="new-chat" class="new-chat"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>New chat</span></button>
+        <nav class="nav" aria-label="Sections">
+          <button class="tab active" data-tab="chat"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg><span>Chat</span></button>
+          <button class="tab" data-tab="jarvis"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg><span>Jarvis</span></button>
+          <button class="tab" data-tab="review" id="review-tab" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7H4V5h11"/></svg><span>Review</span><span id="review-count" class="badge" hidden></span></button>
+          <button class="tab" data-tab="documents"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l5 5v13H6z"/><path d="M14 3v6h6"/></svg><span>Documents</span></button>
+          <button class="tab admin-only" data-tab="approvals"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 11l2 2 4-4"/></svg><span>Approvals</span><span id="approvals-count" class="badge" hidden></span></button>
+          <button class="tab admin-only" data-tab="admin"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg><span>Admin</span></button>
         </nav>
-        <span class="who"><span id="user-name"></span> · <span id="brain-name" class="muted"></span></span>
-        <button id="logout" class="link">Sign out</button>
+        <div class="recents">
+          <p class="sidebar-label">Recent chats</p>
+          <nav id="conversation-list" aria-label="Recent chats"></nav>
+        </div>
+        <div class="sidebar-foot">
+          <div class="theme-switch" role="group" aria-label="Theme">
+            <button type="button" data-theme-choice="dark">Dark</button>
+            <button type="button" data-theme-choice="light">Light</button>
+            <button type="button" data-theme-choice="system">Auto</button>
+          </div>
+          <div class="profile">
+            <span id="avatar" class="avatar" aria-hidden="true"></span>
+            <span class="profile-text"><span id="user-name"></span><small id="user-role"></small></span>
+            <button type="button" id="logout" class="icon-button" title="Sign out" aria-label="Sign out"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h4v16h-4"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h10"/></svg></button>
+          </div>
+        </div>
+      </aside>
+      <div id="scrim" class="scrim" hidden></div>
+
+      <div class="app-main">
+      <header class="mobile-bar">
+        <button type="button" id="toggle-sidebar" class="icon-button" aria-label="Open menu" aria-expanded="false" aria-controls="app-sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+        <span id="mobile-title" class="mobile-title">Chat</span>
       </header>
 
       <section id="tab-chat" class="tab-panel chat">
-        <aside class="chat-sidebar" aria-label="Chats">
-          <button type="button" id="new-chat" class="new-chat"><span aria-hidden="true">＋</span> New chat</button>
-          <p class="sidebar-label">Recent</p>
-          <nav id="conversation-list"></nav>
-        </aside>
         <div class="chat-main">
           <div class="chat-header">
-            <button type="button" id="toggle-sidebar" class="icon-button" aria-label="Show chats" aria-expanded="false">☰</button>
             <span id="chat-title" class="chat-title">New chat</span>
+            <span id="status-pills" class="pills"></span>
           </div>
           <div id="messages" aria-live="polite">
             <div id="empty-state" class="empty-state">
@@ -140,6 +164,14 @@
         </details>
       </section>
 
+      <section id="tab-approvals" class="tab-panel" hidden>
+        <h2>Approvals</h2>
+        <p class="muted">People who register on the sign-in page wait here. Approve them as a Member or an Admin; they then sign in with the email and password they registered with.</p>
+        <label class="toggle-row"><input type="checkbox" id="access-toggle" /> Show “Register” on the sign-in page</label>
+        <p id="access-note" class="muted"></p>
+        <div id="access-list"></div>
+      </section>
+
       <section id="tab-documents" class="tab-panel" hidden>
         <h2>Company documents</h2>
         <p class="muted">The agent searches these to answer questions. Only admins can add or remove them.</p>
@@ -174,11 +206,6 @@
           <button type="submit">Connect</button>
         </form>
 
-        <h2>Access requests</h2>
-        <label class="muted"><input type="checkbox" id="access-toggle" /> Show "Request access" on the sign-in page (requests come to you for approval)</label>
-        <p id="access-note" class="muted"></p>
-        <div id="access-list"></div>
-
         <h2>Add a person</h2>
         <form id="user-form" class="inline">
           <input name="name" placeholder="Name" required />
@@ -192,6 +219,7 @@
         <table id="audit-table"><thead><tr><th>When</th><th>Event</th><th>Details</th></tr></thead><tbody></tbody></table>
       </section>
       <p id="app-error" class="error" role="alert"></p>
+      </div>
     </div>
 
     <script src="/app.js" type="module"></script>

@@ -545,27 +545,32 @@ export class Store {
 
   // ── Access requests ─────────────────────────────────────────────────────
 
-  /** The company that receives access requests from the sign-in page, if one does. */
+  /**
+   * The company that receives access requests from the sign-in page, if one
+   * does. Until an admin chooses, a server with a single company sends them to
+   * it (and remembers that), so registering works out of the box.
+   */
   async accessRequestsTenant(): Promise<string | undefined> {
     const [row] = await this.db.query<{ value: string }>("SELECT value FROM server_settings WHERE key = 'access_requests_tenant'");
-    return row?.value;
+    if (row) return row.value === 'off' ? undefined : row.value;
+    const tenants = await this.db.query<{ id: string }>('SELECT id FROM tenants LIMIT 2');
+    if (tenants.length !== 1) return undefined;
+    await this.db.query("INSERT INTO server_settings (key, value) VALUES ('access_requests_tenant', $1) ON CONFLICT (key) DO NOTHING", [tenants[0].id]);
+    return this.accessRequestsTenant();
   }
 
   /**
-   * Turns access requests on for a company (if no other company already
-   * receives them) or off. Returns false if another company has them.
+   * Turns access requests on or off for a company. Returns false if another
+   * company receives them; only one can.
    */
   async setAccessRequestsTenant(tenantId: string, enabled: boolean): Promise<boolean> {
-    return this.db.transaction(async (tx) => {
-      const [row] = await tx.query<{ value: string }>("SELECT value FROM server_settings WHERE key = 'access_requests_tenant' FOR UPDATE");
-      if (row && row.value !== tenantId) return false;
-      if (enabled && !row) {
-        await tx.query("INSERT INTO server_settings (key, value) VALUES ('access_requests_tenant', $1)", [tenantId]);
-      } else if (!enabled && row) {
-        await tx.query("DELETE FROM server_settings WHERE key = 'access_requests_tenant'");
-      }
-      return true;
-    });
+    const current = await this.accessRequestsTenant();
+    if (current && current !== tenantId) return false;
+    await this.db.query(
+      "INSERT INTO server_settings (key, value) VALUES ('access_requests_tenant', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+      [enabled ? tenantId : 'off'],
+    );
+    return true;
   }
 
   /** Records a request, replacing an earlier pending one from the same email. */

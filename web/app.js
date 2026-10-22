@@ -94,37 +94,85 @@ async function showApp() {
   $('#app-view').hidden = false;
   $('#company-name').textContent = me.companyName;
   $('#user-name').textContent = me.name;
-  // Shows at a glance whether the agent can look things up live.
-  $('#brain-name').textContent = `${me.brain} · web search ${me.web ? 'on' : 'off'}`;
+  $('#user-role').textContent = me.role === 'admin' ? 'Admin' : 'Member';
+  $('#avatar').textContent = (me.name.trim()[0] ?? '?').toUpperCase();
+  renderStatusPills();
   for (const el of document.querySelectorAll('.admin-only')) el.hidden = me.role !== 'admin';
   setUpDatabase();
+  if (me.role === 'admin') refreshApprovalsCount();
   await loadConversations();
   const latest = conversations[0];
   if (latest) await openConversation(latest.id);
   else startNewChat();
 }
 
-// The chat fills the window below the top bar, whose height changes when it wraps on a phone.
-new ResizeObserver(([entry]) => {
-  document.documentElement.style.setProperty('--topbar-height', `${Math.ceil(entry.borderBoxSize[0].blockSize)}px`);
-}).observe($('.topbar'));
-
-// ── Tabs ──────────────────────────────────────────────────────────────────
-
-for (const tab of document.querySelectorAll('.tab')) {
-  tab.addEventListener('click', () => {
-    for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t === tab);
-    for (const panel of document.querySelectorAll('.tab-panel')) panel.hidden = panel.id !== `tab-${tab.dataset.tab}`;
-    showError('#app-error');
-    if (tab.dataset.tab === 'jarvis') jarvis.show(me.companyName);
-    else jarvis.hide();
-    // Jarvis adds to the same conversation, so Chat re-reads it.
-    if (tab.dataset.tab === 'chat') refreshChat().catch((err) => showError('#app-error', err));
-    if (tab.dataset.tab === 'documents') loadDocuments();
-    if (tab.dataset.tab === 'review') loadReview();
-    if (tab.dataset.tab === 'admin') loadAdmin();
-  });
+/** Small status pills in the chat header: the AI in use, and what it can reach. */
+function renderStatusPills() {
+  const pills = [
+    [me.brain, true],
+    [`Web search ${me.web ? 'on' : 'off'}`, me.web],
+    ...(me.database !== undefined ? [[`Database ${me.database ? 'connected' : 'off'}`, me.database]] : []),
+  ];
+  $('#status-pills').replaceChildren(
+    ...pills.map(([label, on]) => {
+      const pill = document.createElement('span');
+      pill.className = `pill${on ? ' on' : ''}`;
+      pill.textContent = label;
+      return pill;
+    }),
+  );
 }
+
+// ── Navigation (the sidebar) ──────────────────────────────────────────────
+
+function showTab(name) {
+  for (const t of document.querySelectorAll('.nav .tab')) t.classList.toggle('active', t.dataset.tab === name);
+  for (const panel of document.querySelectorAll('.tab-panel')) panel.hidden = panel.id !== `tab-${name}`;
+  $('#mobile-title').textContent = document.querySelector(`.nav .tab[data-tab="${name}"] span`)?.textContent ?? '';
+  showError('#app-error');
+  closeSidebar();
+  if (name === 'jarvis') jarvis.show(me.companyName);
+  else jarvis.hide();
+  // Jarvis adds to the same conversation, so Chat re-reads it.
+  if (name === 'chat') refreshChat().catch((err) => showError('#app-error', err));
+  if (name === 'documents') loadDocuments();
+  if (name === 'review') loadReview();
+  if (name === 'approvals') loadAccessRequests().catch((err) => showError('#app-error', err));
+  if (name === 'admin') loadAdmin();
+}
+
+for (const tab of document.querySelectorAll('.nav .tab')) tab.addEventListener('click', () => showTab(tab.dataset.tab));
+
+// On narrow screens the sidebar slides over the page.
+$('#toggle-sidebar').addEventListener('click', () => {
+  const open = !$('#app-view').classList.contains('nav-open');
+  $('#app-view').classList.toggle('nav-open', open);
+  $('#scrim').hidden = !open;
+  $('#toggle-sidebar').setAttribute('aria-expanded', String(open));
+});
+
+$('#scrim').addEventListener('click', () => closeSidebar());
+
+function closeSidebar() {
+  $('#app-view').classList.remove('nav-open');
+  $('#scrim').hidden = true;
+  $('#toggle-sidebar').setAttribute('aria-expanded', 'false');
+}
+
+// ── Theme: dark, light, or follow the device (web/theme.js applies it on load) ──
+
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try {
+    localStorage.setItem('theme', theme);
+  } catch {
+    // Not remembered; still applied for this visit.
+  }
+  for (const b of document.querySelectorAll('[data-theme-choice]')) b.setAttribute('aria-pressed', String(b.dataset.themeChoice === theme));
+}
+
+for (const b of document.querySelectorAll('[data-theme-choice]')) b.addEventListener('click', () => setTheme(b.dataset.themeChoice));
+setTheme(document.documentElement.dataset.theme || 'dark');
 
 // ── Jarvis (web/jarvis.js), sharing the Chat tab's conversation ───────────
 
@@ -161,8 +209,9 @@ function renderConversationList() {
     open.className = 'conversation-open';
     open.textContent = c.title;
     open.title = c.title;
-    open.addEventListener('click', () => {
-      openConversation(c.id).catch((err) => showError('#app-error', err));
+    open.addEventListener('click', async () => {
+      if ($('#tab-chat').hidden) showTab('chat');
+      await openConversation(c.id).catch((err) => showError('#app-error', err));
       closeSidebar();
     });
     const remove = document.createElement('button');
@@ -219,21 +268,10 @@ function setChatTitle() {
 }
 
 $('#new-chat').addEventListener('click', () => {
+  if ($('#tab-chat').hidden) showTab('chat');
   startNewChat();
   closeSidebar();
 });
-
-// On narrow screens the list of chats slides over the chat.
-$('#toggle-sidebar').addEventListener('click', () => {
-  const open = !$('#tab-chat').classList.contains('sidebar-open');
-  $('#tab-chat').classList.toggle('sidebar-open', open);
-  $('#toggle-sidebar').setAttribute('aria-expanded', String(open));
-});
-
-function closeSidebar() {
-  $('#tab-chat').classList.remove('sidebar-open');
-  $('#toggle-sidebar').setAttribute('aria-expanded', 'false');
-}
 
 // ── Chat: messages ────────────────────────────────────────────────────────
 
@@ -571,6 +609,7 @@ const DATABASE_SUGGESTIONS = [
 
 function setUpDatabase() {
   $('#review-tab').hidden = !me.database;
+  renderStatusPills();
   if (me.database) {
     // Point the welcome screen at what the database makes possible.
     document.querySelectorAll('.suggestion').forEach((button, i) => (button.textContent = DATABASE_SUGGESTIONS[i] ?? button.textContent));
@@ -830,18 +869,30 @@ function renderTools(tools) {
   }
 }
 
+async function refreshApprovalsCount() {
+  try {
+    const { requests } = await api('/api/admin/access-requests');
+    $('#approvals-count').textContent = requests.length;
+    $('#approvals-count').hidden = requests.length === 0;
+  } catch {
+    // The count is a convenience; the Approvals tab shows any error.
+  }
+}
+
 async function loadAccessRequests() {
   const data = await api('/api/admin/access-requests');
+  $('#approvals-count').textContent = data.requests.length;
+  $('#approvals-count').hidden = data.requests.length === 0;
   const toggle = $('#access-toggle');
   toggle.checked = data.enabled;
   toggle.disabled = data.takenElsewhere;
   $('#access-note').textContent = data.takenElsewhere ? 'Another company on this server receives access requests.' : '';
   const list = $('#access-list');
   list.replaceChildren();
-  if (data.enabled && data.requests.length === 0) {
+  if (data.requests.length === 0) {
     const empty = document.createElement('p');
-    empty.className = 'muted';
-    empty.textContent = 'No requests waiting.';
+    empty.className = 'muted empty-card';
+    empty.textContent = data.enabled ? 'Nobody is waiting. New registrations appear here.' : 'Registering is off, so nobody can ask to join.';
     list.append(empty);
   }
   for (const request of data.requests) {
@@ -878,7 +929,7 @@ async function loadAccessRequests() {
       approve.disabled = reject.disabled = true;
       try {
         await api('/api/admin/access-requests/decide', { method: 'POST', body: { id: request.id, decision, role: role.value } });
-        await loadAdmin();
+        await loadAccessRequests();
       } catch (err) {
         showError('#app-error', err);
         approve.disabled = reject.disabled = false;
@@ -905,7 +956,6 @@ $('#access-toggle').addEventListener('change', async (e) => {
 async function loadAdmin() {
   try {
     await loadSheetStatus();
-    await loadAccessRequests();
     renderTools((await api('/api/admin/tools')).tools);
     const { entries } = await api('/api/admin/audit');
     const body = $('#audit-table tbody');
