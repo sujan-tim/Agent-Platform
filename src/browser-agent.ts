@@ -16,7 +16,8 @@
  */
 
 import type { Brain, ChatMessage, ToolCall, ToolSpec } from './brain/types.ts';
-import { cleanCitations } from './agent.ts';
+import { cleanCitations, databaseBrief, databasePrompt } from './agent.ts';
+import type { CompanyDb } from './companydb.ts';
 import type { Embedder } from './embed.ts';
 import type { Source, Store, User } from './store.ts';
 import { findTool, isToolAllowed, isToolAvailable, TOOLS } from './tools.ts';
@@ -141,6 +142,7 @@ export async function browserStep(input: {
   store: Store;
   embedder?: Embedder;
   web?: WebSearcher;
+  companies?: CompanyDb;
   user: User;
   companyName: string;
   /** The task so far, oldest first, as the extension keeps it. */
@@ -152,9 +154,11 @@ export async function browserStep(input: {
   const settings = await store.getToolSettings(tenantId);
   const browserControl = findTool('browser_control')!;
   const canAct = isToolAllowed(browserControl, settings);
-  // Server tools: read ones the company allows, minus the switch itself; no write tools from a web page.
+  // Server tools: read ones the company allows, and ones that only propose (for review);
+  // never a write tool that changes something directly, from a web page.
+  const companies = input.companies;
   const serverTools = TOOLS.filter(
-    (t) => t.kind === 'read' && isToolAllowed(t, settings) && isToolAvailable(t, { web }),
+    (t) => (t.kind === 'read' || t.proposes) && isToolAllowed(t, settings) && isToolAvailable(t, { web, companies }),
   );
   const offered = [
     ...(canAct ? BROWSER_TOOLS : []),
@@ -171,7 +175,13 @@ export async function browserStep(input: {
 
   const messages = withPage(input.messages, input.page);
   const toolsUsed: string[] = [];
-  const system = browserSystemPrompt({ companyName: input.companyName, userName: user.name, canAct, web: serverTools.some((t) => t.needs === 'web') });
+  const database = serverTools.some((t) => t.needs === 'sheet') ? await databaseBrief(companies) : undefined;
+  const system = [
+    browserSystemPrompt({ companyName: input.companyName, userName: user.name, canAct, web: serverTools.some((t) => t.needs === 'web') }),
+    database ? `${databasePrompt(database)}\nWhen the person is on a company's website and asks to add or update it, read the facts from the page and propose them, with the page as the source.` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   for (let round = 0; round < MAX_SERVER_ROUNDS; round++) {
     const reply = await brain.respond({ system, messages, tools: offered });
@@ -205,7 +215,7 @@ export async function browserStep(input: {
         continue;
       }
       try {
-        const content = await tool.run({ store, tenantId, userId: user.id, embedder: input.embedder, web, cite }, call.arguments);
+        const content = await tool.run({ store, tenantId, userId: user.id, embedder: input.embedder, web, companies, cite }, call.arguments);
         toolsUsed.push(tool.name);
         await store.audit(tenantId, user.id, 'tool_call', { tool: tool.name, arguments: call.arguments, via: 'extension' });
         serverResults.push(toolResult(call, content));

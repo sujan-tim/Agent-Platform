@@ -37,6 +37,7 @@
         <nav>
           <button class="tab active" data-tab="chat">Chat</button>
           <button class="tab" data-tab="jarvis">Jarvis</button>
+          <button class="tab" data-tab="review" id="review-tab" hidden>Review <span id="review-count" class="badge" hidden></span></button>
           <button class="tab" data-tab="documents">Documents</button>
           <button class="tab admin-only" data-tab="admin">Admin</button>
         </nav>
@@ -111,6 +112,22 @@
         </div>
       </section>
 
+      <section id="tab-review" class="tab-panel" hidden>
+        <h2>Changes waiting for review</h2>
+        <p class="muted">The agent proposes changes to the company database here. Nothing changes in the Google Sheet until an admin approves it. Before writing, each change is checked against the sheet again, so it never overwrites an edit made since.</p>
+        <div class="review-actions admin-only">
+          <label class="muted"><input type="checkbox" id="select-all" /> Select all</label>
+          <button type="button" id="approve-selected">Approve selected</button>
+          <button type="button" id="reject-selected" class="secondary">Reject selected</button>
+          <span id="review-status" class="muted" role="status"></span>
+        </div>
+        <div id="change-list"></div>
+        <details id="change-history">
+          <summary>Recent decisions</summary>
+          <div id="history-list"></div>
+        </details>
+      </section>
+
       <section id="tab-documents" class="tab-panel" hidden>
         <h2>Company documents</h2>
         <p class="muted">The agent searches these to answer questions. Only admins can add or remove them.</p>
@@ -137,6 +154,13 @@
         <h2>Tools</h2>
         <p class="muted">Read tools only look things up. Write tools change something and start turned off.</p>
         <table id="tool-table"><thead><tr><th>Tool</th><th>Kind</th><th>What it does</th><th>On</th></tr></thead><tbody></tbody></table>
+
+        <h2>Company database</h2>
+        <div id="sheet-status" class="sheet-status"></div>
+        <form id="sheet-form" class="inline" hidden>
+          <input name="sheet" placeholder="Google Sheet link or ID" required />
+          <button type="submit">Connect</button>
+        </form>
 
         <h2>Add a person</h2>
         <form id="user-form" class="inline">

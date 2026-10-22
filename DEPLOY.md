@@ -47,6 +47,18 @@ learned in training. With it, it can look things up on the web.
 1. Sign up at <https://tavily.com> (free: 1,000 searches a month, no card).
 2. Copy your API key (it starts with `tvly-`).
 
+## 2c. A company database in Google Sheets (optional)
+
+1. In Google Cloud (console.cloud.google.com): create a project, enable the
+   **Google Sheets API**, create a **service account**, and download a **JSON
+   key** for it (Keys → Add key → JSON).
+2. Share the sheet with the service account's email as **Editor**.
+3. In Render's Environment, add `GOOGLE_SERVICE_ACCOUNT_JSON` (the whole key
+   file) and `SHEET_ID` (the ID between `/d/` and `/edit` in the sheet's link).
+4. On the site, an admin opens **Admin → Company database** and pastes the
+   sheet's link. Only sheets listed in `SHEET_ID` can be connected, each by one
+   company.
+
 ## 3. Render: the app
 
 1. Sign up at <https://render.com> with your GitHub account.

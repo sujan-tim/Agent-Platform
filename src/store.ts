@@ -50,6 +50,33 @@ export interface StoredMessage {
   meta?: MessageMeta;
 }
 
+/** A company's connected Google Sheet. */
+export interface SheetConnection {
+  sheetId: string;
+  tab: string;
+}
+
+/** A change to the company sheet, waiting for (or past) a person's decision. */
+export interface SheetChange {
+  id: number;
+  kind: 'update' | 'add';
+  status: 'pending' | 'applied' | 'rejected' | 'failed';
+  row: number | null;
+  company: string;
+  column: string | null;
+  oldValue: string | null;
+  /** For an update, the new cell value; for an add, the new row as JSON. */
+  newValue: string;
+  reason: string;
+  sources: string[];
+  warning: string | null;
+  proposedBy: string;
+  proposedAt: string;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  note: string | null;
+}
+
 export interface ConversationSummary {
   id: string;
   /** The first question, shortened. */
@@ -130,6 +157,32 @@ CREATE TABLE IF NOT EXISTS tool_settings (
   enabled BOOLEAN NOT NULL,
   PRIMARY KEY (tenant_id, tool_name)
 );
+CREATE TABLE IF NOT EXISTS sheet_connections (
+  tenant_id TEXT PRIMARY KEY REFERENCES tenants(id),
+  sheet_id TEXT NOT NULL UNIQUE,
+  tab TEXT NOT NULL,
+  connected_by TEXT NOT NULL,
+  connected_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sheet_changes (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  kind TEXT NOT NULL CHECK (kind IN ('update', 'add')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected', 'failed')),
+  row_number INTEGER,
+  company TEXT NOT NULL,
+  column_name TEXT,
+  old_value TEXT,
+  new_value TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  sources JSONB NOT NULL,
+  warning TEXT,
+  proposed_by TEXT NOT NULL,
+  proposed_at TEXT NOT NULL,
+  decided_by TEXT,
+  decided_at TEXT,
+  note TEXT
+);
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -144,6 +197,7 @@ CREATE INDEX IF NOT EXISTS conversations_by_user ON conversations (tenant_id, us
 CREATE INDEX IF NOT EXISTS documents_by_tenant ON documents (tenant_id);
 CREATE INDEX IF NOT EXISTS chunks_by_document ON document_chunks (tenant_id, document_id, position);
 CREATE INDEX IF NOT EXISTS audit_by_tenant ON audit_log (tenant_id, id);
+CREATE INDEX IF NOT EXISTS sheet_changes_by_status ON sheet_changes (tenant_id, status, id);
 `;
 
 const now = () => new Date().toISOString();
@@ -462,6 +516,99 @@ export class Store {
     return rows.map((r) => ({ text: r.text, createdAt: r.created_at }));
   }
 
+  // ── The company sheet ───────────────────────────────────────────────────
+
+  async getSheetConnection(tenantId: string): Promise<SheetConnection | undefined> {
+    const [row] = await this.db.query<{ sheet_id: string; tab: string }>('SELECT sheet_id, tab FROM sheet_connections WHERE tenant_id = $1', [tenantId]);
+    return row && { sheetId: row.sheet_id, tab: row.tab };
+  }
+
+  /** Which company, if any, has connected this sheet. A sheet belongs to one company. */
+  async sheetOwner(sheetId: string): Promise<string | undefined> {
+    const [row] = await this.db.query<{ tenant_id: string }>('SELECT tenant_id FROM sheet_connections WHERE sheet_id = $1', [sheetId]);
+    return row?.tenant_id;
+  }
+
+  async connectSheet(tenantId: string, userId: string, sheet: SheetConnection): Promise<void> {
+    await this.db.query(
+      `INSERT INTO sheet_connections (tenant_id, sheet_id, tab, connected_by, connected_at) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (tenant_id) DO UPDATE SET sheet_id = excluded.sheet_id, tab = excluded.tab, connected_by = excluded.connected_by, connected_at = excluded.connected_at`,
+      [tenantId, sheet.sheetId, sheet.tab, userId, now()],
+    );
+  }
+
+  async disconnectSheet(tenantId: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx.query("UPDATE sheet_changes SET status = 'rejected', note = 'sheet disconnected' WHERE tenant_id = $1 AND status = 'pending'", [tenantId]);
+      await tx.query('DELETE FROM sheet_connections WHERE tenant_id = $1', [tenantId]);
+    });
+  }
+
+  async proposeSheetChange(
+    tenantId: string,
+    userId: string,
+    change: Pick<SheetChange, 'kind' | 'row' | 'company' | 'column' | 'oldValue' | 'newValue' | 'reason' | 'sources' | 'warning'>,
+  ): Promise<number> {
+    const [row] = await this.db.query<{ id: number }>(
+      `INSERT INTO sheet_changes (tenant_id, kind, status, row_number, company, column_name, old_value, new_value, reason, sources, warning, proposed_by, proposed_at)
+       VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+      [
+        tenantId,
+        change.kind,
+        change.row,
+        change.company,
+        change.column,
+        change.oldValue,
+        change.newValue,
+        change.reason,
+        JSON.stringify(change.sources),
+        change.warning,
+        userId,
+        now(),
+      ],
+    );
+    return row.id;
+  }
+
+  /** A pending change to the same cell, so the same proposal is not queued twice. */
+  async findPendingChange(tenantId: string, company: string, column: string | null, newValue: string): Promise<number | undefined> {
+    const [row] = await this.db.query<{ id: number }>(
+      `SELECT id FROM sheet_changes WHERE tenant_id = $1 AND status = 'pending' AND company = $2
+       AND column_name IS NOT DISTINCT FROM $3 AND new_value = $4 LIMIT 1`,
+      [tenantId, company, column, newValue],
+    );
+    return row?.id;
+  }
+
+  async listSheetChanges(tenantId: string, status: SheetChange['status'] | 'all' = 'pending', limit = 200): Promise<SheetChange[]> {
+    const rows = await this.db.query<Record<string, any>>(
+      `SELECT c.*, p.name AS proposer, d.name AS decider FROM sheet_changes c
+       LEFT JOIN users p ON p.id = c.proposed_by AND p.tenant_id = c.tenant_id
+       LEFT JOIN users d ON d.id = c.decided_by AND d.tenant_id = c.tenant_id
+       WHERE c.tenant_id = $1 AND ($2 = 'all' OR c.status = $2)
+       ORDER BY c.id ${status === 'pending' ? 'ASC' : 'DESC'} LIMIT $3`,
+      [tenantId, status, limit],
+    );
+    return rows.map(toSheetChange);
+  }
+
+  async getSheetChanges(tenantId: string, ids: number[]): Promise<SheetChange[]> {
+    const rows = await this.db.query<Record<string, any>>(
+      `SELECT c.*, p.name AS proposer, NULL AS decider FROM sheet_changes c
+       LEFT JOIN users p ON p.id = c.proposed_by AND p.tenant_id = c.tenant_id
+       WHERE c.tenant_id = $1 AND c.id = ANY($2::int[]) ORDER BY c.id`,
+      [tenantId, ids],
+    );
+    return rows.map(toSheetChange);
+  }
+
+  async decideSheetChange(tenantId: string, id: number, userId: string, status: 'applied' | 'rejected' | 'failed', note?: string): Promise<void> {
+    await this.db.query(
+      "UPDATE sheet_changes SET status = $1, decided_by = $2, decided_at = $3, note = $4 WHERE tenant_id = $5 AND id = $6 AND status = 'pending'",
+      [status, userId, now(), note ?? null, tenantId, id],
+    );
+  }
+
   // ── Tool rules ──────────────────────────────────────────────────────────
 
   /** Explicit admin choices for this company; tools not listed use their default. */
@@ -501,6 +648,27 @@ export class Store {
     );
     return rows.map((r) => ({ at: r.at, userId: r.user_id, event: r.event, detail: r.detail }));
   }
+}
+
+function toSheetChange(r: Record<string, any>): SheetChange {
+  return {
+    id: r.id,
+    kind: r.kind,
+    status: r.status,
+    row: r.row_number,
+    company: r.company,
+    column: r.column_name,
+    oldValue: r.old_value,
+    newValue: r.new_value,
+    reason: r.reason,
+    sources: r.sources ?? [],
+    warning: r.warning,
+    proposedBy: r.proposer ?? 'someone',
+    proposedAt: r.proposed_at,
+    decidedBy: r.decider ?? null,
+    decidedAt: r.decided_at,
+    note: r.note,
+  };
 }
 
 function shorten(text: string, max: number): string {

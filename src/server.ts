@@ -33,6 +33,7 @@ import { createEmbedder, type Embedder, embedAllPending, embedPending } from './
 import { ExtractError, extractFileText } from './extract.ts';
 import { ADDRESS_LIMIT, EMAIL_LIMIT, type Limit, RateLimiter } from './ratelimit.ts';
 import { createWebSearcher, type WebSearcher } from './websearch.ts';
+import { createSheetService, type SheetService } from './sheetservice.ts';
 import { Store, type User } from './store.ts';
 import { findTool, toolStates } from './tools.ts';
 
@@ -83,10 +84,13 @@ export function createApp(deps: {
   embedder?: Embedder;
   /** Turns on the web tools; without it, they are not offered. */
   web?: WebSearcher;
+  /** Connects companies to their Google Sheet; without it, the database tools are not offered. */
+  sheets?: SheetService;
   /** Sign-in limits; tests pass small ones. */
   limits?: { email: Limit; address: Limit; browserSteps?: Limit };
 }): Server {
-  const { config, store, brain, embedder, web } = deps;
+  const { config, store, brain, embedder, web, sheets } = deps;
+  const companiesOf = (user: User) => sheets?.forTenant(user.tenantId);
   const emailLimiter = new RateLimiter(deps.limits?.email ?? EMAIL_LIMIT);
   // A runaway extension task must not spend the whole AI allowance.
   const stepLimiter = new RateLimiter(deps.limits?.browserSteps ?? BROWSER_STEP_LIMIT);
@@ -206,6 +210,7 @@ export function createApp(deps: {
         brain: brain.name,
         search: embedder ? 'meaning' : 'keywords',
         web: !!web,
+        database: !!(await companiesOf(user)),
       };
     },
 
@@ -241,6 +246,7 @@ export function createApp(deps: {
           store,
           embedder,
           web,
+          companies: await companiesOf(user),
           user,
           companyName: (await store.getTenant(user.tenantId))?.name ?? 'your company',
           history,
@@ -277,6 +283,107 @@ export function createApp(deps: {
       return { ok: true };
     },
 
+    // ── The company database (a Google Sheet) ──
+
+    'GET /api/sheet': async (ctx) => {
+      const user = await requireUser(ctx);
+      const connection = await store.getSheetConnection(user.tenantId);
+      const status = {
+        configured: !!sheets,
+        robotEmail: sheets?.robotEmail ?? null,
+        connection: connection ?? null,
+        pending: (await store.listSheetChanges(user.tenantId, 'pending')).length,
+      };
+      const db = await companiesOf(user);
+      if (!db) return status;
+      try {
+        const { rows } = await db.load();
+        const columns = (await db.profile()).map((p) => ({ name: p.name, filled: p.filled, internal: p.internal }));
+        return { ...status, rows: rows.length, columns };
+      } catch (err) {
+        return { ...status, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
+    'POST /api/sheet/connect': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      if (!sheets) throw new HttpError(400, 'This server has no Google robot account set up (GOOGLE_SERVICE_ACCOUNT_JSON and SHEET_ID).');
+      const body = await readJson(ctx.req);
+      const sheetId = sheetIdFrom(String(body.sheet ?? ''));
+      // The same answer whether the sheet is unknown or taken, so IDs cannot be probed.
+      const owner = await store.sheetOwner(sheetId);
+      if (!sheets.isAllowed(sheetId) || (owner && owner !== admin.tenantId)) {
+        throw new HttpError(403, 'That sheet is not available to connect. Check the ID, and that it is in SHEET_ID on the server.');
+      }
+      let tabs: string[];
+      try {
+        tabs = await sheets.tabs(sheetId);
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : String(err));
+      }
+      const tab = typeof body.tab === 'string' && body.tab ? body.tab : await sheets.guessTab(sheetId, tabs);
+      if (!tabs.includes(tab)) throw new HttpError(400, `There is no tab "${tab}". Tabs: ${tabs.join(', ')}.`);
+      sheets.forget(admin.tenantId);
+      await store.connectSheet(admin.tenantId, admin.id, { sheetId, tab });
+      await store.audit(admin.tenantId, admin.id, 'sheet_connected', { tab });
+      return { connected: true, tab, tabs };
+    },
+
+    'DELETE /api/sheet': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      await store.disconnectSheet(admin.tenantId);
+      sheets?.forget(admin.tenantId);
+      await store.audit(admin.tenantId, admin.id, 'sheet_disconnected');
+      return { ok: true };
+    },
+
+    'GET /api/sheet/changes': async (ctx) => {
+      const user = await requireUser(ctx);
+      const status = ctx.url.searchParams.get('status') ?? 'pending';
+      if (!['pending', 'applied', 'rejected', 'failed', 'all'].includes(status)) throw new HttpError(400, 'Unknown status.');
+      return { changes: await store.listSheetChanges(user.tenantId, status as 'pending') };
+    },
+
+    /** An admin approves (writes to the sheet) or rejects proposed changes. */
+    'POST /api/sheet/changes/decide': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      const body = await readJson(ctx.req);
+      const ids = Array.isArray(body.ids) ? body.ids.filter((id): id is number => Number.isInteger(id)).slice(0, 500) : [];
+      if (ids.length === 0) throw new HttpError(400, 'Choose at least one change.');
+      if (body.decision !== 'approve' && body.decision !== 'reject') throw new HttpError(400, '"decision" must be approve or reject.');
+      const changes = (await store.getSheetChanges(admin.tenantId, ids)).filter((c) => c.status === 'pending');
+      if (body.decision === 'reject') {
+        for (const c of changes) await store.decideSheetChange(admin.tenantId, c.id, admin.id, 'rejected');
+        await store.audit(admin.tenantId, admin.id, 'sheet_changes_rejected', { ids: changes.map((c) => c.id) });
+        return { applied: 0, rejected: changes.length, failed: [] };
+      }
+      const db = await companiesOf(admin);
+      if (!db) throw new HttpError(400, 'No sheet is connected.');
+      const failed: Array<{ id: number; reason: string }> = [];
+      let applied = 0;
+      // In the order proposed, so later changes build on earlier ones.
+      for (const c of changes) {
+        let result: { ok: true } | { ok: false; reason: string };
+        try {
+          result =
+            c.kind === 'add'
+              ? await db.applyAdd(JSON.parse(c.newValue) as Record<string, string>)
+              : await db.applyUpdate({ row: c.row!, company: c.company, column: c.column!, oldValue: c.oldValue ?? '', newValue: c.newValue });
+        } catch (err) {
+          result = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+        }
+        if (result.ok) {
+          applied++;
+          await store.decideSheetChange(admin.tenantId, c.id, admin.id, 'applied');
+        } else {
+          failed.push({ id: c.id, reason: result.reason });
+          await store.decideSheetChange(admin.tenantId, c.id, admin.id, 'failed', result.reason);
+        }
+      }
+      await store.audit(admin.tenantId, admin.id, 'sheet_changes_applied', { applied, failed: failed.length });
+      return { applied, rejected: 0, failed };
+    },
+
     /** One step of a Chrome extension task; see src/browser-agent.ts. */
     'POST /api/browser/step': async (ctx) => {
       const user = await requireUser(ctx);
@@ -292,6 +399,7 @@ export function createApp(deps: {
           store,
           embedder,
           web,
+          companies: await companiesOf(user),
           user,
           companyName: (await store.getTenant(user.tenantId))?.name ?? 'your company',
           messages,
@@ -361,7 +469,7 @@ export function createApp(deps: {
 
     'GET /api/admin/tools': async (ctx) => {
       const user = await requireAdmin(ctx);
-      return { tools: await toolStates(store, user.tenantId, { web, browser: true }) };
+      return { tools: await toolStates(store, user.tenantId, { web, browser: true, companies: await companiesOf(user) }) };
     },
 
     'PUT /api/admin/tools': async (ctx) => {
@@ -372,7 +480,7 @@ export function createApp(deps: {
       if (typeof body.enabled !== 'boolean') throw new HttpError(400, '"enabled" must be true or false.');
       await store.setToolEnabled(user.tenantId, tool.name, body.enabled);
       await store.audit(user.tenantId, user.id, 'tool_setting_changed', { tool: tool.name, enabled: body.enabled });
-      return { tools: await toolStates(store, user.tenantId, { web, browser: true }) };
+      return { tools: await toolStates(store, user.tenantId, { web, browser: true, companies: await companiesOf(user) }) };
     },
 
     'POST /api/admin/users': async (ctx) => {
@@ -443,6 +551,14 @@ function clientAddress(req: IncomingMessage, trustProxy: TrustProxy): string {
   const forwarded = req.headers['cf-connecting-ip'] ?? req.headers['x-forwarded-for'];
   const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0].trim();
   return first || socket;
+}
+
+/** A sheet ID, from the ID itself or a full Google Sheets link. */
+function sheetIdFrom(text: string): string {
+  const fromLink = /\/spreadsheets\/d\/([\w-]+)/.exec(text)?.[1];
+  const id = (fromLink ?? text).trim();
+  if (!/^[\w-]{20,}$/.test(id)) throw new HttpError(400, 'Paste the sheet link, or the ID between /d/ and /edit in it.');
+  return id;
 }
 
 const MAX_BROWSER_BODY_BYTES = 400_000;
@@ -573,12 +689,19 @@ async function main(): Promise<void> {
   const brain = createBrain(config);
   const embedder = createEmbedder(config);
   const web = createWebSearcher();
-  createApp({ config, store, brain, embedder, web }).listen(config.port, () => {
+  let sheets: SheetService | undefined;
+  try {
+    sheets = createSheetService(store);
+  } catch (err) {
+    console.warn(`Company database is off: ${err instanceof Error ? err.message : err}`);
+  }
+  createApp({ config, store, brain, embedder, web, sheets }).listen(config.port, () => {
     console.log(`Agent Platform running at http://localhost:${config.port}`);
     console.log(`AI brain: ${brain.name}`);
     console.log(`Database: ${describeDatabase(config.database)}`);
     console.log(`Document search: ${embedder ? `by meaning (${embedder.model}) and keywords` : 'keywords'}`);
     console.log(`Web search: ${web ? `on (${web.name})` : 'off (set TAVILY_API_KEY to turn it on)'}`);
+    console.log(`Company database: ${sheets ? `ready (robot ${sheets.robotEmail}); connect it under Admin` : 'off (set GOOGLE_SERVICE_ACCOUNT_JSON and SHEET_ID)'}`);
     if (!process.env.SESSION_SECRET) console.log('No SESSION_SECRET set: sign-ins reset when the server restarts.');
   });
   // Check embeddings work, then catch up on passages added while they were off or failing.

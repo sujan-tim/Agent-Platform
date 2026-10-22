@@ -77,6 +77,7 @@ async function showApp() {
   // Shows at a glance whether the agent can look things up live.
   $('#brain-name').textContent = `${me.brain} · web search ${me.web ? 'on' : 'off'}`;
   for (const el of document.querySelectorAll('.admin-only')) el.hidden = me.role !== 'admin';
+  setUpDatabase();
   await loadConversations();
   const latest = conversations[0];
   if (latest) await openConversation(latest.id);
@@ -100,6 +101,7 @@ for (const tab of document.querySelectorAll('.tab')) {
     // Jarvis adds to the same conversation, so Chat re-reads it.
     if (tab.dataset.tab === 'chat') refreshChat().catch((err) => showError('#app-error', err));
     if (tab.dataset.tab === 'documents') loadDocuments();
+    if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'admin') loadAdmin();
   });
 }
@@ -216,6 +218,13 @@ function closeSidebar() {
 // ── Chat: messages ────────────────────────────────────────────────────────
 
 const TOOL_LABELS = {
+  company_db_overview: 'Looked at the company database',
+  find_companies: 'Searched the company database',
+  get_company: 'Looked up a company',
+  company_totals: 'Added up the company database',
+  find_duplicate_companies: 'Checked for duplicates',
+  propose_company_update: 'Proposed changes for review',
+  propose_new_company: 'Proposed a new company for review',
   web_search: 'Searched the web',
   read_web_page: 'Read a web page',
   search_documents: 'Searched company documents',
@@ -338,6 +347,7 @@ async function send(question) {
     const box = $('#messages');
     box.scrollTo({ top: answer.offsetTop - box.offsetTop - 16, behavior: 'smooth' });
     if ($('#speak-replies').checked) speak(result.reply);
+    if (result.toolsUsed.some((t) => t.startsWith('propose_'))) refreshReviewCount();
     if (isNew) {
       await loadConversations();
       setChatTitle();
@@ -531,6 +541,236 @@ $('#document-form').addEventListener('submit', async (e) => {
   }
 });
 
+// ── Company database: suggestions and the Review tab ──────────────────────
+
+const DATABASE_SUGGESTIONS = [
+  'Which companies are missing a website?',
+  'Total Net Sales by country',
+  'Find duplicate companies in our database',
+];
+
+function setUpDatabase() {
+  $('#review-tab').hidden = !me.database;
+  if (me.database) {
+    // Point the welcome screen at what the database makes possible.
+    document.querySelectorAll('.suggestion').forEach((button, i) => (button.textContent = DATABASE_SUGGESTIONS[i] ?? button.textContent));
+    refreshReviewCount();
+  }
+}
+
+async function refreshReviewCount() {
+  if (!me.database) return;
+  try {
+    const { changes } = await api('/api/sheet/changes');
+    $('#review-count').textContent = changes.length;
+    $('#review-count').hidden = changes.length === 0;
+  } catch {
+    // The count is a convenience; the Review tab shows any error.
+  }
+}
+
+function describeValue(value) {
+  return value === '' || value === null || value === undefined ? '(empty)' : value;
+}
+
+function renderChange(change, { selectable }) {
+  const card = document.createElement('div');
+  card.className = `change change-${change.status}`;
+
+  const head = document.createElement('div');
+  head.className = 'change-head';
+  if (selectable) {
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'change-select';
+    box.value = change.id;
+    box.setAttribute('aria-label', `Select change to ${change.company}`);
+    head.append(box);
+  }
+  const title = document.createElement('strong');
+  title.textContent = change.kind === 'add' ? `Add ${change.company}` : change.company;
+  head.append(title);
+  if (change.kind === 'update') {
+    const where = document.createElement('span');
+    where.className = 'muted';
+    where.textContent = ` · row ${change.row} · ${change.column}`;
+    head.append(where);
+  }
+  card.append(head);
+
+  if (change.kind === 'update') {
+    const diff = document.createElement('div');
+    diff.className = 'diff';
+    const before = document.createElement('span');
+    before.className = 'old';
+    before.textContent = describeValue(change.oldValue);
+    const after = document.createElement('span');
+    after.className = 'new';
+    after.textContent = describeValue(change.newValue);
+    diff.append(before, ' → ', after);
+    card.append(diff);
+  } else {
+    const fields = document.createElement('dl');
+    fields.className = 'fields';
+    for (const [column, value] of Object.entries(JSON.parse(change.newValue))) {
+      const dt = document.createElement('dt');
+      dt.textContent = column;
+      const dd = document.createElement('dd');
+      dd.textContent = value;
+      fields.append(dt, dd);
+    }
+    card.append(fields);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'change-meta muted';
+  const when = new Date(change.decidedAt ?? change.proposedAt).toLocaleString();
+  meta.textContent =
+    change.status === 'pending'
+      ? `${change.reason} · proposed by ${change.proposedBy}, ${when}`
+      : `${change.status === 'applied' ? 'Approved' : change.status === 'rejected' ? 'Rejected' : 'Could not apply'} by ${change.decidedBy ?? 'someone'}, ${when}${change.note ? ` · ${change.note}` : ''}`;
+  card.append(meta);
+
+  if (change.warning) {
+    const warn = document.createElement('div');
+    warn.className = 'change-warning';
+    warn.textContent = `⚠ ${change.warning}`;
+    card.append(warn);
+  }
+  if (change.sources.length) {
+    const links = document.createElement('div');
+    links.className = 'change-sources';
+    for (const url of change.sources) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = hostOf(url);
+      a.title = url;
+      links.append(a);
+    }
+    card.append(links);
+  }
+  return card;
+}
+
+async function loadReview() {
+  showError('#app-error');
+  try {
+    const [{ changes }, { changes: history }] = await Promise.all([api('/api/sheet/changes'), api('/api/sheet/changes?status=all')]);
+    const list = $('#change-list');
+    list.replaceChildren();
+    if (changes.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'muted';
+      empty.textContent = 'Nothing waiting. Ask the agent to update or add companies, and its proposals appear here.';
+      list.append(empty);
+    }
+    for (const change of changes) list.append(renderChange(change, { selectable: me.role === 'admin' }));
+    $('#select-all').checked = false;
+    const historyList = $('#history-list');
+    historyList.replaceChildren(...history.filter((c) => c.status !== 'pending').slice(0, 50).map((c) => renderChange(c, { selectable: false })));
+    $('#review-count').textContent = changes.length;
+    $('#review-count').hidden = changes.length === 0;
+  } catch (err) {
+    showError('#app-error', err);
+  }
+}
+
+$('#select-all').addEventListener('change', (e) => {
+  for (const box of document.querySelectorAll('.change-select')) box.checked = e.target.checked;
+});
+
+async function decide(decision) {
+  const ids = [...document.querySelectorAll('.change-select:checked')].map((box) => Number(box.value));
+  if (ids.length === 0) {
+    showError('#app-error', new Error('Select the changes first.'));
+    return;
+  }
+  const status = $('#review-status');
+  status.textContent = decision === 'approve' ? 'Writing to the sheet…' : 'Rejecting…';
+  for (const button of [$('#approve-selected'), $('#reject-selected')]) button.disabled = true;
+  try {
+    const result = await api('/api/sheet/changes/decide', { method: 'POST', body: { ids, decision } });
+    status.textContent =
+      decision === 'approve'
+        ? `${result.applied} change${result.applied === 1 ? '' : 's'} written to the sheet.${result.failed.length ? ` ${result.failed.length} could not be applied (see Recent decisions).` : ''}`
+        : `${result.rejected} rejected.`;
+    await loadReview();
+  } catch (err) {
+    status.textContent = '';
+    showError('#app-error', err);
+  } finally {
+    for (const button of [$('#approve-selected'), $('#reject-selected')]) button.disabled = false;
+  }
+}
+
+$('#approve-selected').addEventListener('click', () => decide('approve'));
+$('#reject-selected').addEventListener('click', () => decide('reject'));
+
+// ── Admin: the company database connection ────────────────────────────────
+
+async function loadSheetStatus() {
+  const box = $('#sheet-status');
+  box.replaceChildren();
+  const line = (text, className = '') => {
+    const p = document.createElement('p');
+    p.className = className;
+    p.textContent = text;
+    box.append(p);
+    return p;
+  };
+  const status = await api('/api/sheet');
+  $('#sheet-form').hidden = !status.configured || !!status.connection;
+  if (!status.configured) {
+    line('Not set up on this server. Add GOOGLE_SERVICE_ACCOUNT_JSON and SHEET_ID to the server settings (see DEPLOY.md).', 'muted');
+    return;
+  }
+  if (!status.connection) {
+    line(`Share the Google Sheet with ${status.robotEmail} as Editor, then paste its link below.`, 'muted');
+    return;
+  }
+  if (status.error) {
+    line(`Connected to the "${status.connection.tab}" tab, but it cannot be read: ${status.error}`, 'error');
+  } else {
+    line(`✓ Connected to the "${status.connection.tab}" tab: ${status.rows} companies, ${status.columns.length} columns. ${status.pending} change${status.pending === 1 ? '' : 's'} waiting for review.`);
+  }
+  const disconnect = document.createElement('button');
+  disconnect.type = 'button';
+  disconnect.className = 'link';
+  disconnect.textContent = 'Disconnect';
+  disconnect.addEventListener('click', async () => {
+    if (!confirm('Disconnect the company database? Changes waiting for review are discarded; the sheet itself is not touched.')) return;
+    try {
+      await api('/api/sheet', { method: 'DELETE' });
+      me.database = false;
+      setUpDatabase();
+      loadSheetStatus();
+    } catch (err) {
+      showError('#app-error', err);
+    }
+  });
+  box.append(disconnect);
+}
+
+$('#sheet-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = e.target.querySelector('button');
+  button.disabled = true;
+  try {
+    await api('/api/sheet/connect', { method: 'POST', body: formData(e.target) });
+    e.target.reset();
+    me.database = true;
+    setUpDatabase();
+    showError('#app-error');
+    await loadSheetStatus();
+  } catch (err) {
+    showError('#app-error', err);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 // ── Admin ─────────────────────────────────────────────────────────────────
 
 function cell(text) {
@@ -572,6 +812,7 @@ function renderTools(tools) {
 
 async function loadAdmin() {
   try {
+    await loadSheetStatus();
     renderTools((await api('/api/admin/tools')).tools);
     const { entries } = await api('/api/admin/audit');
     const body = $('#audit-table tbody');

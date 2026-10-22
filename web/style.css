@@ -508,3 +508,31 @@ th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var
   .conversation-delete { opacity: 1; }
   .msg-user .bubble { max-width: 92%; }
 }
+
+/* ── Review: changes to the company database ── */
+
+.badge[hidden] { display: none; }
+.badge { display: inline-grid; place-items: center; min-width: 1.2rem; height: 1.2rem; padding: 0 0.3rem; margin-left: 0.2rem; border-radius: 999px; background: var(--accent); color: #fff; font-size: 0.72rem; font-weight: 600; }
+.review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 1rem 0; }
+.review-actions label { display: inline-flex; align-items: center; gap: 0.35rem; margin: 0; }
+button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--line); }
+#change-list, #history-list { display: flex; flex-direction: column; gap: 0.6rem; }
+#change-history { margin-top: 1.5rem; }
+#history-list { margin-top: 0.75rem; }
+.change { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 0.8rem 1rem; }
+.change-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.change-head input { margin: 0; }
+.diff { margin: 0.45rem 0; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9rem; overflow-wrap: anywhere; }
+.diff .old { color: var(--error); text-decoration: line-through; opacity: 0.85; }
+.diff .new { color: #067647; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .diff .new { color: #47cd89; } }
+.fields { display: grid; grid-template-columns: max-content 1fr; gap: 0.15rem 0.8rem; margin: 0.45rem 0; font-size: 0.9rem; }
+.fields dt { color: var(--muted); }
+.fields dd { margin: 0; overflow-wrap: anywhere; }
+.change-meta { font-size: 0.82rem; }
+.change-warning { margin-top: 0.35rem; font-size: 0.82rem; color: #b54708; }
+.change-sources { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.4rem; }
+.change-sources a { font-size: 0.78rem; padding: 0.1rem 0.5rem; border: 1px solid var(--line); border-radius: 999px; color: var(--accent); text-decoration: none; }
+.change-applied, .change-rejected, .change-failed { opacity: 0.75; }
+.change-failed .change-meta { color: var(--error); }
+.sheet-status p { margin: 0.3rem 0; }

@@ -17,6 +17,13 @@ setting.
   without the wake word, and you can talk over him to interrupt. It is the
   same agent and conversation as Chat, so the company's documents, tool rules
   and audit log all apply.
+- **Company database (Google Sheets).** Connect a company's Google Sheet
+  and ask about it in plain English ("which prospects in Brazil have no
+  website?", "Net Sales by country"), find duplicates, and add or update
+  companies. Every change is proposed into a **Review** tab and written to the
+  sheet only after an admin approves it, after checking the row has not
+  changed since. Internal columns (Status, Net Sales…) are never filled from
+  the web.
 - **Chrome extension.** A side panel that stays open next to any website,
   reads the page, and works through it for you (clicks, typing, forms,
   moving between pages), asking before anything that sends, submits, buys or
@@ -124,6 +131,9 @@ How the code is laid out:
 | `src/websearch.ts` | Live web search and page reading (Tavily) |
 | `src/auth.ts` | Password hashing and signed sign-in cookies |
 | `src/brain/` | One file per AI brain, all behind `src/brain/types.ts` |
+| `src/google.ts` | The robot Google account's sign-in, and a small Sheets client |
+| `src/companydb.ts` | The company database: a sheet tab read, searched and updated like a table |
+| `src/sheetservice.ts` | Which company has connected which sheet |
 | `src/browser-agent.ts` | The Chrome extension's agent: one page step at a time |
 | `extension/` | The Chrome extension (side panel) |
 | `web/` | The browser app (plain HTML, CSS and JavaScript); `web/jarvis.js` is the Jarvis tab |
