@@ -3,9 +3,9 @@
  *
  * With a script, it replays the given replies in order. Without one, it
  * follows a simple rule set so the app is usable with no model at all:
- * a question mentioning "time" asks for the clock, "search" or "document"
- * searches the company's documents, "note" saves a note, and anything else
- * is echoed back.
+ * a question mentioning "time" asks for the clock, "web" or "news" searches
+ * the web, "search" or "document" searches the company's documents, "note"
+ * saves a note, and anything else is echoed back.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -42,6 +42,7 @@ function ruleBased({ messages, tools }: BrainRequest): BrainReply {
   });
 
   if (/\btime\b/i.test(question) && offered.has('get_current_time')) return call('get_current_time', {});
+  if (/\b(web|news)\b/i.test(question) && offered.has('web_search')) return call('web_search', { query: question });
   if (/\b(search|document|docs?)\b/i.test(question) && offered.has('search_documents')) {
     return call('search_documents', { query: question });
   }

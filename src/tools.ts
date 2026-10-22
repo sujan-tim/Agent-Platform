@@ -9,6 +9,7 @@
 import type { ToolSpec } from './brain/types.ts';
 import type { Embedder } from './embed.ts';
 import type { Store } from './store.ts';
+import type { WebSearcher } from './websearch.ts';
 
 export interface ToolContext {
   store: Store;
@@ -16,10 +17,14 @@ export interface ToolContext {
   userId: string;
   /** Present when search by meaning is on. */
   embedder?: Embedder;
+  /** Present when the server has a web search service. */
+  web?: WebSearcher;
 }
 
 export interface Tool extends ToolSpec {
   kind: 'read' | 'write';
+  /** Set when the tool needs a service this server may not have; without it, the tool is not offered. */
+  needs?: 'web';
   run(ctx: ToolContext, args: Record<string, unknown>): string | Promise<string>;
 }
 
@@ -61,6 +66,55 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'web_search',
+    kind: 'read',
+    needs: 'web',
+    description:
+      'Searches the live web and returns the top results with their titles, links, dates and summaries. Use it for anything current or recent (news, prices, people, events, companies) and for anything the company documents do not cover. Set news to true for recent news.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'What to search for, as you would type it into a search engine.' },
+        news: { type: 'boolean', description: 'True to search news articles only.' },
+        days: { type: 'integer', description: 'Only results from the last this many days, for recent events.' },
+      },
+      required: ['query'],
+    },
+    run: async ({ web }, args) => {
+      const query = typeof args.query === 'string' ? args.query.trim().slice(0, 400) : '';
+      if (!query) return 'No search query was given.';
+      const days = typeof args.days === 'number' && args.days > 0 ? args.days : undefined;
+      const results = await web!.search(query, { news: args.news === true, days });
+      if (results.length === 0) return 'The web search found nothing for that query.';
+      // Wrapped so the model reads it as material, not as instructions to follow.
+      return results
+        .map(
+          (r) =>
+            `<web_result title="${attr(r.title)}" url="${attr(r.url)}"${r.publishedDate ? ` published="${attr(r.publishedDate)}"` : ''}>\n${r.content}\n</web_result>`,
+        )
+        .join('\n\n');
+    },
+  },
+  {
+    name: 'read_web_page',
+    kind: 'read',
+    needs: 'web',
+    description:
+      'Reads the text of one web page, for when search result summaries are not enough. Give a full http or https link, usually one returned by web_search.',
+    parameters: {
+      type: 'object',
+      properties: { url: { type: 'string', description: 'The full link of the page, starting with http:// or https://.' } },
+      required: ['url'],
+    },
+    run: async ({ web }, args) => {
+      const url = typeof args.url === 'string' ? args.url.trim() : '';
+      if (!/^https?:\/\/\S+$/i.test(url)) return 'Give a full link starting with http:// or https://.';
+      const text = await web!.read(url);
+      const shown = text.length > MAX_PAGE_CHARS ? `${text.slice(0, MAX_PAGE_CHARS)}\n[…the rest of the page is cut off]` : text;
+      return `<web_page url="${attr(url)}">\n${shown}\n</web_page>`;
+    },
+  },
+  {
     name: 'save_note',
     kind: 'write',
     description: 'Saves a short note for this person, for example a reminder or a summary they asked to keep.',
@@ -78,6 +132,14 @@ export const TOOLS: Tool[] = [
   },
 ];
 
+/** How much of a web page the agent is shown: enough to answer from, small enough for free-tier limits. */
+const MAX_PAGE_CHARS = 8_000;
+
+/** Makes text safe inside a double-quoted tag attribute. */
+function attr(text: string): string {
+  return text.replaceAll('"', "'").replaceAll('<', '‹').replaceAll('>', '›');
+}
+
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
 export function findTool(name: string): Tool | undefined {
@@ -89,13 +151,19 @@ export function isToolAllowed(tool: Tool, settings: Map<string, boolean>): boole
   return settings.get(tool.name) ?? tool.kind === 'read';
 }
 
+/** Whether this server can run the tool at all (a web tool needs a web search service). */
+export function isToolAvailable(tool: Tool, services: { web?: WebSearcher }): boolean {
+  return tool.needs !== 'web' || !!services.web;
+}
+
 /** Every tool with its current state for one company, for the admin page. */
-export async function toolStates(store: Store, tenantId: string) {
+export async function toolStates(store: Store, tenantId: string, services: { web?: WebSearcher } = {}) {
   const settings = await store.getToolSettings(tenantId);
   return TOOLS.map((t) => ({
     name: t.name,
     kind: t.kind,
     description: t.description,
     enabled: isToolAllowed(t, settings),
+    available: isToolAvailable(t, services),
   }));
 }

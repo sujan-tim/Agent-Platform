@@ -25,6 +25,9 @@ services:
       # Neon's connection string (postgresql://…?sslmode=require).
       - key: DATABASE_URL
         sync: false
+      # Live web search (free: 1,000 searches a month). Create a key at tavily.com.
+      - key: TAVILY_API_KEY
+        sync: false
       # No Ollama on Render, so search uses keywords.
       - key: EMBEDDINGS
         value: "off"

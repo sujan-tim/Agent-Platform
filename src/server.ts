@@ -31,6 +31,7 @@ import { type Config, loadConfig, type TrustProxy } from './config.ts';
 import { createEmbedder, type Embedder, embedAllPending, embedPending } from './embed.ts';
 import { ExtractError, extractFileText } from './extract.ts';
 import { ADDRESS_LIMIT, EMAIL_LIMIT, type Limit, RateLimiter } from './ratelimit.ts';
+import { createWebSearcher, type WebSearcher } from './websearch.ts';
 import { Store, type User } from './store.ts';
 import { findTool, toolStates } from './tools.ts';
 
@@ -79,10 +80,12 @@ export function createApp(deps: {
   brain: Brain;
   /** Turns on search by meaning; without it, search uses keywords. */
   embedder?: Embedder;
+  /** Turns on the web tools; without it, they are not offered. */
+  web?: WebSearcher;
   /** Sign-in limits; tests pass small ones. */
   limits?: { email: Limit; address: Limit };
 }): Server {
-  const { config, store, brain, embedder } = deps;
+  const { config, store, brain, embedder, web } = deps;
   const emailLimiter = new RateLimiter(deps.limits?.email ?? EMAIL_LIMIT);
   const addressLimiter = new RateLimiter(deps.limits?.address ?? ADDRESS_LIMIT);
 
@@ -227,6 +230,7 @@ export function createApp(deps: {
           brain,
           store,
           embedder,
+          web,
           user,
           companyName: (await store.getTenant(user.tenantId))?.name ?? 'your company',
           history,
@@ -298,7 +302,7 @@ export function createApp(deps: {
 
     'GET /api/admin/tools': async (ctx) => {
       const user = await requireAdmin(ctx);
-      return { tools: await toolStates(store, user.tenantId) };
+      return { tools: await toolStates(store, user.tenantId, { web }) };
     },
 
     'PUT /api/admin/tools': async (ctx) => {
@@ -309,7 +313,7 @@ export function createApp(deps: {
       if (typeof body.enabled !== 'boolean') throw new HttpError(400, '"enabled" must be true or false.');
       await store.setToolEnabled(user.tenantId, tool.name, body.enabled);
       await store.audit(user.tenantId, user.id, 'tool_setting_changed', { tool: tool.name, enabled: body.enabled });
-      return { tools: await toolStates(store, user.tenantId) };
+      return { tools: await toolStates(store, user.tenantId, { web }) };
     },
 
     'POST /api/admin/users': async (ctx) => {
@@ -475,11 +479,13 @@ async function main(): Promise<void> {
   }
   const brain = createBrain(config);
   const embedder = createEmbedder(config);
-  createApp({ config, store, brain, embedder }).listen(config.port, () => {
+  const web = createWebSearcher();
+  createApp({ config, store, brain, embedder, web }).listen(config.port, () => {
     console.log(`Agent Platform running at http://localhost:${config.port}`);
     console.log(`AI brain: ${brain.name}`);
     console.log(`Database: ${describeDatabase(config.database)}`);
     console.log(`Document search: ${embedder ? `by meaning (${embedder.model}) and keywords` : 'keywords'}`);
+    console.log(`Web search: ${web ? `on (${web.name})` : 'off (set TAVILY_API_KEY to turn it on)'}`);
     if (!process.env.SESSION_SECRET) console.log('No SESSION_SECRET set: sign-ins reset when the server restarts.');
   });
   // Check embeddings work, then catch up on passages added while they were off or failing.

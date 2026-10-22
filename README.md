@@ -27,6 +27,10 @@ setting.
 - **Search by meaning.** With Ollama, documents are also searched by meaning,
   so "time off" finds a passage about "vacation days". Keyword search always
   runs too, and takes over on its own if embeddings are off or unavailable.
+- **Live web search.** With a free [Tavily](https://tavily.com) key
+  (`TAVILY_API_KEY`), the agent searches the web and reads pages for anything
+  current or not in the company's documents, and gives the links it used.
+  Company admins can switch each web tool off.
 - **Tool rules per company.** Tools that only look things up are on. Tools that
   change something (today: saving a note) start off; an admin turns them on.
 - **Audit log.** Every question, tool call, refusal and answer, per company.
@@ -113,6 +117,7 @@ How the code is laid out:
 | `src/embed.ts` | Search by meaning: embeddings from Ollama |
 | `src/extract.ts` | Text out of PDF, Word, text and Markdown uploads |
 | `src/ratelimit.ts` | Sign-in and sign-up rate limits |
+| `src/websearch.ts` | Live web search and page reading (Tavily) |
 | `src/auth.ts` | Password hashing and signed sign-in cookies |
 | `src/brain/` | One file per AI brain, all behind `src/brain/types.ts` |
 | `web/` | The browser app (plain HTML, CSS and JavaScript); `web/jarvis.js` is the Jarvis tab |

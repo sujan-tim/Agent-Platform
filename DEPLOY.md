@@ -39,6 +39,14 @@ git add . && git commit -m "Hosting: Postgres, Groq, Render" && git push
 2. Go to **API Keys**, create a key named `agent-platform`, and copy it
    (it starts with `gsk_`). It is shown only once.
 
+## 2b. Tavily: live web search (optional, recommended)
+
+Without this the agent only knows the company's documents and what its model
+learned in training. With it, it can look things up on the web.
+
+1. Sign up at <https://tavily.com> (free: 1,000 searches a month, no card).
+2. Copy your API key (it starts with `tvly-`).
+
 ## 3. Render: the app
 
 1. Sign up at <https://render.com> with your GitHub account.
@@ -48,6 +56,7 @@ git add . && git commit -m "Hosting: Postgres, Groq, Render" && git push
 3. Render asks for two values:
    - `DATABASE_URL`: the Neon connection string from step 1.
    - `GROQ_API_KEY`: the Groq key from step 2.
+   - `TAVILY_API_KEY`: the Tavily key from step 2b (leave empty to skip web search).
 4. Press **Apply**. The first build takes a few minutes. When the log shows
    `Agent Platform running`, the address at the top of the page
    (`https://agent-platform-xxxx.onrender.com`) is your site.
@@ -79,6 +88,8 @@ Render's **Logs** tab shows what the app printed.
 | `AI_PROVIDER=groq needs GROQ_API_KEY` | Add the key under Environment |
 | `groq rejected the API key` | The key was mistyped or deleted; make a new one |
 | `groq's free limit is used up` | Wait a minute; it resets. Many users at once need a paid plan |
+| `Web search: off` at start-up | Add `TAVILY_API_KEY` under Environment |
+| `monthly web search allowance is used up` | The free 1,000 searches are spent; they reset on the 1st of the month |
 | `groq has no model "…"` | Groq retired that model. In Render → Environment, set `GROQ_MODEL` to the replacement listed at <https://console.groq.com/docs/deprecations> |
 | `password authentication failed` or `ENOTFOUND` | `DATABASE_URL` is wrong; copy it again from Neon |
 | `SESSION_SECRET must be set in production` | Add `SESSION_SECRET` with any long random text |

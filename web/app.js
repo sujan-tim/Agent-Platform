@@ -306,7 +306,9 @@ function renderTools(tools) {
     const tr = document.createElement('tr');
     const toggle = document.createElement('input');
     toggle.type = 'checkbox';
-    toggle.checked = tool.enabled;
+    toggle.checked = tool.enabled && tool.available;
+    // A tool this server cannot run (no web search service) cannot be switched on.
+    toggle.disabled = !tool.available;
     toggle.setAttribute('aria-label', `Turn ${tool.name} on or off`);
     toggle.addEventListener('change', async () => {
       try {
@@ -317,6 +319,12 @@ function renderTools(tools) {
     });
     const on = document.createElement('td');
     on.append(toggle);
+    if (!tool.available) {
+      const note = document.createElement('small');
+      note.className = 'muted';
+      note.textContent = ' Not set up on this server (needs TAVILY_API_KEY).';
+      on.append(note);
+    }
     tr.append(cell(tool.name), cell(tool.kind), cell(tool.description), on);
     body.append(tr);
   }
