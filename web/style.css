@@ -1,0 +1,105 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1c2430;
+  --muted: #5d6877;
+  --line: #dde2e8;
+  --accent: #2856d6;
+  --accent-soft: #e7edfb;
+  --error: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161c;
+    --panel: #1b2129;
+    --text: #e6eaef;
+    --muted: #9aa5b3;
+    --line: #2c3540;
+    --accent: #7c9cf5;
+    --accent-soft: #24304a;
+    --error: #f97066;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+h1 { font-size: 1.6rem; margin: 0 0 1rem; }
+h2 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1.5rem; }
+.narrow { max-width: 420px; margin: 8vh auto; }
+.muted { color: var(--muted); }
+.error { color: var(--error); min-height: 1.5em; }
+
+label { display: block; margin: 0.6rem 0; }
+input, textarea, select, button { font: inherit; }
+input:not([type='checkbox']):not([type='file']), textarea, select {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+button {
+  padding: 0.5rem 1rem;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+button.link { background: none; color: var(--accent); padding: 0.25rem 0.5rem; }
+details { margin-top: 1rem; }
+summary { cursor: pointer; color: var(--accent); }
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.topbar nav { display: flex; gap: 0.25rem; flex: 1; }
+.tab { background: none; color: var(--muted); }
+.tab.active { background: var(--accent-soft); color: var(--text); }
+.who { font-size: 0.9rem; }
+
+.tab-panel { max-width: 860px; margin: 0 auto; padding: 1rem; }
+#app-error { max-width: 860px; margin: 0 auto; padding: 0 1rem; }
+
+#messages { display: flex; flex-direction: column; gap: 0.6rem; min-height: 50vh; padding: 0.5rem 0; }
+.message { max-width: 80%; padding: 0.6rem 0.85rem; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message.user { align-self: flex-end; background: var(--accent); color: #fff; }
+.message.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+.message.pending { color: var(--muted); }
+.message.error { color: var(--error); }
+.message small { display: block; margin-top: 0.3rem; color: var(--muted); font-size: 0.8rem; }
+
+#chat-form { display: flex; gap: 0.5rem; position: sticky; bottom: 0; padding: 0.75rem 0; background: var(--bg); }
+#chat-form input { flex: 1; }
+#mic { background: var(--accent-soft); color: var(--text); }
+#mic.on { background: var(--error); color: #fff; }
+.row { display: flex; justify-content: space-between; align-items: center; }
+
+table { width: 100%; border-collapse: collapse; background: var(--panel); }
+th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 0.92rem; }
+#audit-table td:last-child { font-family: ui-monospace, monospace; font-size: 0.8rem; overflow-wrap: anywhere; }
+.inline { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.inline input, .inline select { flex: 1 1 160px; width: auto; }
+#document-list li { margin: 0.3rem 0; }
+
+@media (max-width: 600px) {
+  .message { max-width: 95%; }
+  .topbar nav { order: 3; flex-basis: 100%; }
+}

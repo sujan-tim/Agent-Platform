@@ -1,0 +1,25 @@
+{
+  "name": "agent-platform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A multi-company personal-agent platform: per-company data, tool rules and audit logs around a swappable AI brain (Ollama, mock, or Claude).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "test": "node --import tsx --test --test-reporter=spec test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

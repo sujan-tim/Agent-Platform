@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Platform</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <!-- Signed out: sign in, or create a company -->
+    <main id="auth-view" class="card narrow" hidden>
+      <h1>Agent Platform</h1>
+      <form id="login-form">
+        <h2>Sign in</h2>
+        <label>Email <input name="email" type="email" autocomplete="email" required /></label>
+        <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+        <button type="submit">Sign in</button>
+      </form>
+      <details>
+        <summary>New here? Create a company account</summary>
+        <form id="signup-form">
+          <label>Company name <input name="companyName" required /></label>
+          <label>Your name <input name="name" autocomplete="name" required /></label>
+          <label>Email <input name="email" type="email" autocomplete="email" required /></label>
+          <label>Password (10+ characters) <input name="password" type="password" minlength="10" autocomplete="new-password" required /></label>
+          <button type="submit">Create account</button>
+        </form>
+      </details>
+      <p id="auth-error" class="error" role="alert"></p>
+    </main>
+
+    <!-- Signed in -->
+    <div id="app-view" hidden>
+      <header class="topbar">
+        <strong id="company-name"></strong>
+        <nav>
+          <button class="tab active" data-tab="chat">Chat</button>
+          <button class="tab" data-tab="documents">Documents</button>
+          <button class="tab admin-only" data-tab="admin">Admin</button>
+        </nav>
+        <span class="who"><span id="user-name"></span> · <span id="brain-name" class="muted"></span></span>
+        <button id="logout" class="link">Sign out</button>
+      </header>
+
+      <section id="tab-chat" class="tab-panel">
+        <div id="messages" aria-live="polite"></div>
+        <form id="chat-form">
+          <button type="button" id="mic" title="Speak (Chrome or Edge)" aria-label="Speak">🎤</button>
+          <input id="chat-input" placeholder="Ask anything…" autocomplete="off" />
+          <button type="submit">Send</button>
+        </form>
+        <div class="row">
+          <label class="muted"><input type="checkbox" id="speak-replies" /> Read replies aloud</label>
+          <button id="new-chat" class="link">New conversation</button>
+        </div>
+      </section>
+
+      <section id="tab-documents" class="tab-panel" hidden>
+        <h2>Company documents</h2>
+        <p class="muted">The agent searches these to answer questions. Only admins can add or remove them.</p>
+        <ul id="document-list"></ul>
+        <form id="document-form" class="admin-only">
+          <label>Title <input name="title" required /></label>
+          <label>Text <textarea name="text" rows="8" required placeholder="Paste a policy, manual or FAQ…"></textarea></label>
+          <label>…or load a .txt / .md file <input type="file" id="document-file" accept=".txt,.md,text/plain,text/markdown" /></label>
+          <button type="submit">Add document</button>
+        </form>
+      </section>
+
+      <section id="tab-admin" class="tab-panel" hidden>
+        <h2>Tools</h2>
+        <p class="muted">Read tools only look things up. Write tools change something and start turned off.</p>
+        <table id="tool-table"><thead><tr><th>Tool</th><th>Kind</th><th>What it does</th><th>On</th></tr></thead><tbody></tbody></table>
+
+        <h2>Add a person</h2>
+        <form id="user-form" class="inline">
+          <input name="name" placeholder="Name" required />
+          <input name="email" type="email" placeholder="Email" required />
+          <input name="password" type="password" placeholder="Temporary password (10+)" minlength="10" required />
+          <select name="role"><option value="member">Member</option><option value="admin">Admin</option></select>
+          <button type="submit">Add</button>
+        </form>
+
+        <h2>Audit log</h2>
+        <table id="audit-table"><thead><tr><th>When</th><th>Event</th><th>Details</th></tr></thead><tbody></tbody></table>
+      </section>
+      <p id="app-error" class="error" role="alert"></p>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
