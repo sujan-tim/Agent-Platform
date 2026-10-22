@@ -25,8 +25,11 @@ export interface ToolContext {
 
 export interface Tool extends ToolSpec {
   kind: 'read' | 'write';
-  /** Set when the tool needs a service this server may not have; without it, the tool is not offered. */
-  needs?: 'web';
+  /**
+   * Set when the tool needs something only some callers have: 'web' a web search
+   * service, 'browser' the Chrome extension, which runs browser actions itself.
+   */
+  needs?: 'web' | 'browser';
   run(ctx: ToolContext, args: Record<string, unknown>): string | Promise<string>;
 }
 
@@ -119,6 +122,19 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    // Not run here: this entry is the company switch for the Chrome extension's
+    // browser actions (src/browser-agent.ts). Off by default, like every write tool.
+    name: 'browser_control',
+    kind: 'write',
+    needs: 'browser',
+    description:
+      "Lets the Chrome extension act on websites for this company's people: click, type, choose options and move between pages. It always asks the person before sending, submitting, buying or deleting. Without it, the extension can still read pages and answer questions about them.",
+    parameters: { type: 'object', properties: {} },
+    run: () => {
+      throw new Error('Browser actions run in the Chrome extension.');
+    },
+  },
+  {
     name: 'save_note',
     kind: 'write',
     description: 'Saves a short note for this person, for example a reminder or a summary they asked to keep.',
@@ -155,13 +171,15 @@ export function isToolAllowed(tool: Tool, settings: Map<string, boolean>): boole
   return settings.get(tool.name) ?? tool.kind === 'read';
 }
 
-/** Whether this server can run the tool at all (a web tool needs a web search service). */
-export function isToolAvailable(tool: Tool, services: { web?: WebSearcher }): boolean {
-  return tool.needs !== 'web' || !!services.web;
+/** Whether the caller can run the tool at all (web tools need a web search service; browser control, the extension). */
+export function isToolAvailable(tool: Tool, services: { web?: WebSearcher; browser?: boolean }): boolean {
+  if (tool.needs === 'web') return !!services.web;
+  if (tool.needs === 'browser') return !!services.browser;
+  return true;
 }
 
 /** Every tool with its current state for one company, for the admin page. */
-export async function toolStates(store: Store, tenantId: string, services: { web?: WebSearcher } = {}) {
+export async function toolStates(store: Store, tenantId: string, services: { web?: WebSearcher; browser?: boolean } = {}) {
   const settings = await store.getToolSettings(tenantId);
   return TOOLS.map((t) => ({
     name: t.name,

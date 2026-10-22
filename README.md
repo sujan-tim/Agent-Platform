@@ -17,6 +17,10 @@ setting.
   without the wake word, and you can talk over him to interrupt. It is the
   same agent and conversation as Chat, so the company's documents, tool rules
   and audit log all apply.
+- **Chrome extension.** A side panel that stays open next to any website,
+  reads the page, and works through it for you (clicks, typing, forms,
+  moving between pages), asking before anything that sends, submits, buys or
+  deletes. See [extension/README.md](extension/README.md).
 - **Companies and people.** Anyone can create a company account; its first
   person is the admin, who can add others.
 - **Chat with voice.** Type, or press the microphone and speak (Chrome or Edge).
@@ -120,6 +124,8 @@ How the code is laid out:
 | `src/websearch.ts` | Live web search and page reading (Tavily) |
 | `src/auth.ts` | Password hashing and signed sign-in cookies |
 | `src/brain/` | One file per AI brain, all behind `src/brain/types.ts` |
+| `src/browser-agent.ts` | The Chrome extension's agent: one page step at a time |
+| `extension/` | The Chrome extension (side panel) |
 | `web/` | The browser app (plain HTML, CSS and JavaScript); `web/jarvis.js` is the Jarvis tab |
 | `test/` | Tests: company separation, tool rules, the API end to end |
 

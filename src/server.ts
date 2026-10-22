@@ -14,6 +14,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { runAgent } from './agent.ts';
+import { browserStep, MAX_SNAPSHOT_CHARS, type PageState } from './browser-agent.ts';
 import {
   clearedSessionCookie,
   hashPassword,
@@ -83,10 +84,12 @@ export function createApp(deps: {
   /** Turns on the web tools; without it, they are not offered. */
   web?: WebSearcher;
   /** Sign-in limits; tests pass small ones. */
-  limits?: { email: Limit; address: Limit };
+  limits?: { email: Limit; address: Limit; browserSteps?: Limit };
 }): Server {
   const { config, store, brain, embedder, web } = deps;
   const emailLimiter = new RateLimiter(deps.limits?.email ?? EMAIL_LIMIT);
+  // A runaway extension task must not spend the whole AI allowance.
+  const stepLimiter = new RateLimiter(deps.limits?.browserSteps ?? BROWSER_STEP_LIMIT);
   const addressLimiter = new RateLimiter(deps.limits?.address ?? ADDRESS_LIMIT);
 
   /** Counts a sign-in or sign-up attempt from this address, refusing it once over the limit. */
@@ -120,7 +123,10 @@ export function createApp(deps: {
   };
 
   const requireUser = async (ctx: Ctx): Promise<User> => {
-    const token = readCookie(ctx.req.headers.cookie, SESSION_COOKIE);
+    // The browser app sends the session cookie; the Chrome extension, which cannot share
+    // the site's cookies, sends the same signed session as a bearer token.
+    const bearer = /^Bearer\s+(\S+)$/i.exec(ctx.req.headers.authorization ?? '')?.[1];
+    const token = bearer ?? readCookie(ctx.req.headers.cookie, SESSION_COOKIE);
     const session = token && verifySession(token, config.sessionSecret);
     const user = session ? await store.getUser(session.tenantId, session.userId) : undefined;
     if (!user) throw new HttpError(401, 'Please sign in.');
@@ -133,12 +139,13 @@ export function createApp(deps: {
     return user;
   };
 
-  const startSession = (res: ServerResponse, user: User) => {
+  const startSession = (res: ServerResponse, user: User): string => {
     const token = signSession(
       { tenantId: user.tenantId, userId: user.id, expiresAt: Date.now() + SESSION_DAYS * 864e5 },
       config.sessionSecret,
     );
     res.setHeader('set-cookie', sessionCookie(token, config.production));
+    return token;
   };
 
   type Handler = (ctx: Ctx) => Promise<unknown> | unknown;
@@ -174,9 +181,11 @@ export function createApp(deps: {
       }
       emailLimiter.clear(email);
       const { passwordHash: _, ...user } = found;
-      await store.audit(user.tenantId, user.id, 'signed_in');
-      startSession(ctx.res, user);
-      return publicUser(user, (await store.getTenant(user.tenantId))?.name ?? '');
+      await store.audit(user.tenantId, user.id, 'signed_in', body.client === 'extension' ? { client: 'extension' } : {});
+      const token = startSession(ctx.res, user);
+      const result = publicUser(user, (await store.getTenant(user.tenantId))?.name ?? '');
+      // The extension keeps the token in its own storage, which web pages cannot read.
+      return body.client === 'extension' ? { ...result, token } : result;
     },
 
     /** For the host's health check: the server is up and the database answers. */
@@ -268,6 +277,32 @@ export function createApp(deps: {
       return { ok: true };
     },
 
+    /** One step of a Chrome extension task; see src/browser-agent.ts. */
+    'POST /api/browser/step': async (ctx) => {
+      const user = await requireUser(ctx);
+      const wait = stepLimiter.retryAfter(user.id);
+      if (wait > 0) throw new HttpError(429, `That is a lot of steps at once. Try again in ${Math.ceil(wait / 1000)} seconds.`);
+      stepLimiter.record(user.id);
+      const body = await readJson(ctx.req, MAX_BROWSER_BODY_BYTES);
+      const messages = browserMessages(body.messages);
+      const page = pageState(body.page);
+      try {
+        return await browserStep({
+          brain,
+          store,
+          embedder,
+          web,
+          user,
+          companyName: (await store.getTenant(user.tenantId))?.name ?? 'your company',
+          messages,
+          page,
+        });
+      } catch (err) {
+        await store.audit(user.tenantId, user.id, 'error', { error: String(err), via: 'extension' });
+        throw new HttpError(502, err instanceof Error ? err.message : 'The AI brain failed.');
+      }
+    },
+
     'POST /api/conversations': async (ctx) => {
       const user = await requireUser(ctx);
       return { conversationId: await store.createConversation(user.tenantId, user.id) };
@@ -326,7 +361,7 @@ export function createApp(deps: {
 
     'GET /api/admin/tools': async (ctx) => {
       const user = await requireAdmin(ctx);
-      return { tools: await toolStates(store, user.tenantId, { web }) };
+      return { tools: await toolStates(store, user.tenantId, { web, browser: true }) };
     },
 
     'PUT /api/admin/tools': async (ctx) => {
@@ -337,7 +372,7 @@ export function createApp(deps: {
       if (typeof body.enabled !== 'boolean') throw new HttpError(400, '"enabled" must be true or false.');
       await store.setToolEnabled(user.tenantId, tool.name, body.enabled);
       await store.audit(user.tenantId, user.id, 'tool_setting_changed', { tool: tool.name, enabled: body.enabled });
-      return { tools: await toolStates(store, user.tenantId, { web }) };
+      return { tools: await toolStates(store, user.tenantId, { web, browser: true }) };
     },
 
     'POST /api/admin/users': async (ctx) => {
@@ -408,6 +443,40 @@ function clientAddress(req: IncomingMessage, trustProxy: TrustProxy): string {
   const forwarded = req.headers['cf-connecting-ip'] ?? req.headers['x-forwarded-for'];
   const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0].trim();
   return first || socket;
+}
+
+const MAX_BROWSER_BODY_BYTES = 400_000;
+const MAX_BROWSER_MESSAGES = 80;
+/** Extension steps per person: enough for long tasks, not for a loop gone wrong. */
+const BROWSER_STEP_LIMIT: Limit = { max: 60, windowMs: 5 * 60_000 };
+
+/** The extension's task so far, checked message by message. */
+function browserMessages(value: unknown): ChatMessage[] {
+  if (!Array.isArray(value) || value.length === 0) throw new HttpError(400, '"messages" must be a non-empty list.');
+  if (value.length > MAX_BROWSER_MESSAGES) throw new HttpError(400, 'This task is too long; start a new one.');
+  return value.map((m: any): ChatMessage => {
+    const content = typeof m?.content === 'string' ? m.content.slice(0, 20_000) : '';
+    if (m?.role === 'user') return { role: 'user', content };
+    if (m?.role === 'tool' && typeof m.toolCallId === 'string' && typeof m.name === 'string') {
+      return { role: 'tool', toolCallId: m.toolCallId, name: m.name, content };
+    }
+    if (m?.role === 'assistant') {
+      const toolCalls = Array.isArray(m.toolCalls)
+        ? m.toolCalls
+            .filter((c: any) => typeof c?.id === 'string' && typeof c?.name === 'string')
+            .map((c: any) => ({ id: c.id, name: c.name, arguments: c.arguments && typeof c.arguments === 'object' ? c.arguments : {} }))
+        : undefined;
+      return { role: 'assistant', content, ...(toolCalls?.length && { toolCalls }), ...(m.raw !== undefined && { raw: m.raw }) };
+    }
+    throw new HttpError(400, 'Each message needs a role of user, assistant or tool.');
+  });
+}
+
+function pageState(value: unknown): PageState | null {
+  if (!value || typeof value !== 'object') return null;
+  const p = value as Record<string, unknown>;
+  const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : '');
+  return { url: str(p.url, 2000), title: str(p.title, 500), snapshot: str(p.snapshot, MAX_SNAPSHOT_CHARS) };
 }
 
 function isJson(req: IncomingMessage): boolean {

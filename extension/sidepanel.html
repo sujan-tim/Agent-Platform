@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Platform</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <!-- Signed out -->
+    <main id="signin-view" class="signin" hidden>
+      <img src="icons/128.png" alt="" width="56" height="56" />
+      <h1>Agent Platform</h1>
+      <p class="muted">Sign in with your company account. The agent works on web pages you allow, and asks before anything important.</p>
+      <form id="signin-form">
+        <label>Server <input name="server" type="url" required /></label>
+        <label>Email <input name="email" type="email" autocomplete="email" required /></label>
+        <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+        <button type="submit">Sign in</button>
+      </form>
+      <p id="signin-error" class="error" role="alert"></p>
+    </main>
+
+    <!-- Signed in -->
+    <div id="main-view" class="main" hidden>
+      <header class="top">
+        <img src="icons/32.png" alt="" width="20" height="20" />
+        <span id="who" class="who"></span>
+        <button type="button" id="new-task" class="ghost" title="Start a new task">New task</button>
+        <button type="button" id="sign-out" class="ghost" title="Sign out">Sign out</button>
+      </header>
+
+      <div id="site-bar" class="site-bar" aria-live="polite">
+        <span id="site-name" class="site-name"></span>
+        <span id="site-status" class="site-status"></span>
+        <button type="button" id="allow-site" class="small" hidden>Allow on this site</button>
+      </div>
+
+      <div id="log" class="log" aria-live="polite">
+        <div id="welcome" class="welcome">
+          <h2>What should I do?</h2>
+          <p class="muted">I can read the page you are on, answer questions about it, and work through it for you. I ask before sending, submitting, buying or deleting anything.</p>
+          <div class="suggestions">
+            <button type="button" class="suggestion">Summarise this page</button>
+            <button type="button" class="suggestion">What are the key points here?</button>
+            <button type="button" class="suggestion">Fill in this form for me</button>
+          </div>
+        </div>
+      </div>
+
+      <form id="composer" class="composer">
+        <textarea id="input" rows="1" placeholder="Ask about this page, or give me a task…" aria-label="Task"></textarea>
+        <button type="submit" id="send" class="round" aria-label="Send" disabled>↑</button>
+        <button type="button" id="stop" class="round stop" aria-label="Stop" hidden>■</button>
+      </form>
+      <p class="note">Check important results. The agent can make mistakes.</p>
+    </div>
+
+    <script src="sidepanel.js" type="module"></script>
+  </body>
+</html>
