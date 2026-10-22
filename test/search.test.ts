@@ -141,3 +141,28 @@ test('cosine similarity', async () => {
   assert.equal(cosine(Float32Array.from([1, 0]), Float32Array.from([0, 3])), 0);
   assert.equal(cosine(Float32Array.from([1, 0]), Float32Array.from([1, 0, 0])), 0, 'different lengths never match');
 });
+
+test('keyword search: rare words outweigh common ones, and word endings are ignored', async () => {
+  const store = await Store.open(':memory:');
+  const { tenant } = await store.createTenantWithAdmin({ companyName: 'Acme', email: 'ann@acme.test', name: 'Ann', passwordHash: 'x' });
+  await store.addDocument(
+    tenant.id,
+    'Company facts',
+    'Acme makes widgets. Acme sells widgets.\n\nAcme is headquartered in Springfield.\n\nAcme sold its Pakistan business in 2026.',
+  );
+  // "Acme" is in every passage, so the rarer "Pakistan" decides.
+  assert.match((await store.searchDocuments(tenant.id, 'Acme Pakistan sale'))[0].excerpt, /Pakistan/);
+  // "headquarters" finds "headquartered".
+  assert.match((await store.searchDocuments(tenant.id, 'where are the headquarters'))[0].excerpt, /Springfield/);
+  // Links are not searched.
+  await store.addDocument(tenant.id, 'Links', 'See https://example.com/pakistan-sale-news for more.');
+  assert.ok((await store.searchDocuments(tenant.id, 'pakistan', 5)).every((h) => h.title !== 'Links'));
+});
+
+test('a heading travels with the paragraph under it', () => {
+  assert.deepEqual(chunkText('# Title\n\n## Leave\n\nStaff get 25 days.\n\nPlain paragraph.\n\n## Trailing heading'), [
+    '# Title\n## Leave\nStaff get 25 days.',
+    'Plain paragraph.',
+    '## Trailing heading',
+  ]);
+});

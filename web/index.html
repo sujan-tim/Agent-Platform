@@ -95,10 +95,10 @@
         <ul id="document-list"></ul>
         <form id="upload-form" class="admin-only">
           <h3>Upload a file</h3>
-          <label>File (PDF, Word .docx, text or Markdown, up to 10 MB)
-            <input type="file" name="file" accept=".pdf,.docx,.txt,.md,.markdown,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown" required />
+          <label>Files (PDF, Word .docx, text or Markdown, up to 10 MB each; pick several at once if you like)
+            <input type="file" name="file" multiple accept=".pdf,.docx,.txt,.md,.markdown,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown" required />
           </label>
-          <label>Title (optional; the file name is used otherwise) <input name="title" /></label>
+          <label>Title (optional, for a single file; file names are used otherwise) <input name="title" /></label>
           <button type="submit">Upload</button>
           <span id="upload-status" class="muted" role="status"></span>
         </form>

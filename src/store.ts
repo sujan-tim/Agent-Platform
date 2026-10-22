@@ -337,8 +337,11 @@ export class Store {
   /**
    * Searches the company's documents, one passage at a time.
    *
-   * Keyword search always runs: each passage scores by how many query words
-   * it contains. Given the query's embedding, passages are also ranked by
+   * Keyword search always runs, scored with BM25 (the usual search-engine
+   * formula): a word found in few passages counts for more than one found in
+   * most, repeats help with diminishing returns, and long passages are not
+   * favoured just for being long. Words are compared after trimming common
+   * endings, so "sales" finds "sale". Given the query's embedding, passages are also ranked by
    * closeness of meaning, and the two rankings are merged (reciprocal rank
    * fusion), so an exact term and a paraphrase both find their passage.
    * Without one — embeddings off, or the embedder failed — it is keyword
@@ -350,7 +353,7 @@ export class Store {
     limit = 3,
     meaning?: { model: string; vector: Float32Array },
   ): Promise<Array<{ title: string; excerpt: string; score: number }>> {
-    const words = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [])].filter((w) => !STOP_WORDS.has(w));
+    const words = [...new Set(terms(query))];
     if (words.length === 0 && !meaning) return [];
     const chunks = await this.db.query<{ id: number; title: string; text: string; embedding: Uint8Array | null }>(
       `SELECT c.id, d.title, c.text, CASE WHEN c.embedding_model = $1 THEN c.embedding END AS embedding
@@ -363,11 +366,7 @@ export class Store {
     const addRanking = (ranked: number[]) =>
       ranked.forEach((id, rank) => fused.set(id, (fused.get(id) ?? 0) + 1 / (RRF_K + rank + 1)));
 
-    const byKeyword = chunks
-      .map((c) => ({ id: c.id, score: words.filter((w) => c.text.toLowerCase().includes(w)).length }))
-      .filter((h) => h.score > 0)
-      .sort((a, b) => b.score - a.score);
-    addRanking(byKeyword.map((h) => h.id));
+    addRanking(rankByKeywords(chunks, words));
 
     if (meaning) {
       const byMeaning = chunks
@@ -462,6 +461,59 @@ const STOP_WORDS = new Set(
     'could should may might must also just more most some such very many much been being here tell know'
   ).split(' '),
 );
+/** BM25's usual settings: how fast repeats stop helping, and how much length is discounted. */
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
+/** How much a query word in the document's title adds, relative to one in the passage. */
+const TITLE_WEIGHT = 0.5;
+
+/** Passage ids that contain any query word, best match first (BM25). */
+function rankByKeywords(chunks: Array<{ id: number; title: string; text: string }>, words: string[]): number[] {
+  if (words.length === 0) return [];
+  const counted = chunks.map((c) => {
+    const counts = new Map<string, number>();
+    const list = terms(c.text);
+    for (const t of list) counts.set(t, (counts.get(t) ?? 0) + 1);
+    return { id: c.id, counts, length: list.length, title: new Set(terms(c.title)) };
+  });
+  const averageLength = counted.reduce((sum, c) => sum + c.length, 0) / Math.max(1, counted.length);
+  const idf = new Map(
+    words.map((w) => {
+      const df = counted.filter((c) => c.counts.has(w)).length;
+      return [w, Math.log(1 + (counted.length - df + 0.5) / (df + 0.5))];
+    }),
+  );
+  return counted
+    .map((c) => {
+      let score = 0;
+      for (const w of words) {
+        const tf = c.counts.get(w) ?? 0;
+        if (tf > 0) score += idf.get(w)! * ((tf * (BM25_K1 + 1)) / (tf + BM25_K1 * (1 - BM25_B + (BM25_B * c.length) / averageLength)));
+      }
+      // The document's title adds a little, but only to a passage that matches on its own,
+      // so "leadership" favours the leadership document without lifting its list of links.
+      if (score > 0) for (const w of words) if (c.title.has(w)) score += TITLE_WEIGHT * idf.get(w)!;
+      return { id: c.id, score };
+    })
+    .filter((h) => h.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((h) => h.id);
+}
+
+/** Searchable words of a text: lower case, no links, no stop words, common endings trimmed. */
+function terms(text: string): string[] {
+  const words = text.replace(/https?:\/\/\S+/g, ' ').toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+  return words.filter((w) => !STOP_WORDS.has(w)).map(stem);
+}
+
+/** Trims a plural or verb ending, so "sales", "selling" and "headquartered" meet their root forms. */
+function stem(word: string): string {
+  for (const ending of ['ing', 'ed', 'es', 's']) {
+    if (word.endsWith(ending) && word.length - ending.length >= 4) return word.slice(0, -ending.length);
+  }
+  return word;
+}
+
 /** Passages longer than this are split, so each one is about one thing. */
 const MAX_CHUNK_CHARS = 1000;
 
@@ -471,8 +523,18 @@ const MAX_CHUNK_CHARS = 1000;
  */
 export function chunkText(text: string): string[] {
   const chunks: string[] = [];
+  let heading = '';
   for (const raw of text.split(/\n\s*\n/)) {
     let paragraph = raw.trim();
+    // A heading on its own says little; it travels with the paragraph below it.
+    if (/^#{1,6}\s/.test(paragraph) && !paragraph.includes('\n')) {
+      heading = heading ? `${heading}\n${paragraph}` : paragraph;
+      continue;
+    }
+    if (heading && paragraph) {
+      paragraph = `${heading}\n${paragraph}`;
+      heading = '';
+    }
     while (paragraph.length > MAX_CHUNK_CHARS) {
       const window = paragraph.slice(0, MAX_CHUNK_CHARS);
       const cut = Math.max(window.lastIndexOf('. '), window.lastIndexOf('\n'), window.lastIndexOf('? '), window.lastIndexOf('! '));
@@ -482,6 +544,7 @@ export function chunkText(text: string): string[] {
     }
     if (paragraph) chunks.push(paragraph);
   }
+  if (heading) chunks.push(heading);
   return chunks;
 }
 

@@ -242,34 +242,42 @@ function readAsBase64(file) {
 $('#upload-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
-  const file = form.elements.file.files[0];
-  if (!file) return;
+  const files = [...form.elements.file.files];
+  if (files.length === 0) return;
   const status = $('#upload-status');
   const button = form.querySelector('button');
   showError('#app-error');
-  if (file.size > MAX_UPLOAD_BYTES) {
-    showError('#app-error', new Error('Files must be at most 10 MB.'));
+  const tooBig = files.filter((f) => f.size > MAX_UPLOAD_BYTES).map((f) => f.name);
+  if (tooBig.length) {
+    showError('#app-error', new Error(`Files must be at most 10 MB: ${tooBig.join(', ')}`));
     return;
   }
+  // The title box names a single file; with several, each keeps its file name.
+  const title = files.length === 1 ? form.elements.title.value : '';
+  const added = [];
+  const failed = [];
+  let keywordsOnly = false;
   button.disabled = true;
-  status.textContent = 'Reading and indexing…';
-  try {
-    const result = await api('/api/documents/upload', {
-      method: 'POST',
-      body: { filename: file.name, title: form.elements.title.value, data: await readAsBase64(file) },
-    });
-    status.textContent = `Added "${result.title}" (${result.chars.toLocaleString()} characters).`;
-    if (me.search === 'meaning' && result.searchableBy !== 'meaning') {
-      status.textContent += ' Search by meaning is unavailable right now, so it is searchable by words for the moment.';
+  // One at a time, so a large batch never overloads the server.
+  for (const [i, file] of files.entries()) {
+    status.textContent = `Reading and indexing ${files.length > 1 ? `${i + 1} of ${files.length}: ` : ''}${file.name}…`;
+    try {
+      const result = await api('/api/documents/upload', {
+        method: 'POST',
+        body: { filename: file.name, title, data: await readAsBase64(file) },
+      });
+      added.push(`"${result.title}" (${result.chars.toLocaleString()} characters)`);
+      if (me.search === 'meaning' && result.searchableBy !== 'meaning') keywordsOnly = true;
+    } catch (err) {
+      failed.push(`${file.name}: ${err.message}`);
     }
-    form.reset();
-    loadDocuments();
-  } catch (err) {
-    status.textContent = '';
-    showError('#app-error', err);
-  } finally {
-    button.disabled = false;
   }
+  button.disabled = false;
+  status.textContent = added.length ? `Added ${added.join(', ')}.` : '';
+  if (keywordsOnly) status.textContent += ' Search by meaning is unavailable right now, so they are searchable by words for the moment.';
+  if (failed.length) showError('#app-error', new Error(`Not added: ${failed.join('; ')}`));
+  if (added.length) form.reset();
+  loadDocuments();
 });
 
 $('#document-form').addEventListener('submit', async (e) => {

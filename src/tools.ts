@@ -52,7 +52,7 @@ export const TOOLS: Tool[] = [
           // Embeddings unavailable right now: keyword search still answers.
         }
       }
-      const hits = await store.searchDocuments(tenantId, query, 3, meaning);
+      const hits = await store.searchDocuments(tenantId, query, 5, meaning);
       if (hits.length === 0) return 'No matching passages in the company documents.';
       // Wrapped so the model reads it as material, not as instructions to follow.
       return hits
