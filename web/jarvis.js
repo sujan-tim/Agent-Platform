@@ -11,6 +11,8 @@
 // Speech uses the browser's own recognition and voices (Chrome or Edge).
 // Everything shown is set with textContent, as in app.js.
 
+import { markdownToSpeech, renderMarkdown } from './markdown.js';
+
 const TAU = Math.PI * 2;
 
 /** Colour per state, from Jarvis's phase colours. */
@@ -71,7 +73,7 @@ export function mountJarvis({ root, api, getConversationId, setConversationId })
     const label = document.createElement('span');
     label.className = 'jv-who';
     label.textContent = who === 'user' ? 'You' : 'Jarvis';
-    const body = document.createElement('span');
+    const body = document.createElement('div');
     body.className = 'jv-text';
     body.textContent = text;
     line.append(label, body);
@@ -85,10 +87,14 @@ export function mountJarvis({ root, api, getConversationId, setConversationId })
     return body;
   }
 
-  /** Reveals a reply a few characters at a time, like the HUD typing it out. */
-  function typeOut(el, text) {
+  /**
+   * Reveals a reply a few characters at a time, like the HUD typing it out,
+   * then swaps in the formatted version (lists, tables, cited sources).
+   */
+  function typeOut(el, text, sources) {
+    const finish = () => el.replaceChildren(renderMarkdown(text, { sources }));
     if (reducedMotion || text.length > 1500) {
-      el.textContent = text;
+      finish();
       return;
     }
     const step = Math.max(2, Math.ceil(text.length / 120));
@@ -97,6 +103,7 @@ export function mountJarvis({ root, api, getConversationId, setConversationId })
       shown = Math.min(text.length, shown + step);
       el.textContent = text.slice(0, shown);
       if (shown < text.length) setTimeout(tick, 16);
+      else finish();
     };
     tick();
   }
@@ -111,7 +118,7 @@ export function mountJarvis({ root, api, getConversationId, setConversationId })
       const result = await api('/api/chat', { method: 'POST', body: { message: question, conversationId: getConversationId() } });
       setConversationId(result.conversationId);
       const meta = result.toolsUsed.length ? `used: ${result.toolsUsed.join(', ')}` : '';
-      typeOut(addLine('jarvis', '', meta), result.reply);
+      typeOut(addLine('jarvis', '', meta), result.reply, result.sources);
       return result.reply;
     } catch (err) {
       addLine('jarvis', err.message, 'error');
@@ -287,7 +294,7 @@ export function mountJarvis({ root, api, getConversationId, setConversationId })
   async function say(text) {
     setPhase('speaking');
     reactor.setLevelSource(() => speech.level());
-    await speech.speak(text);
+    await speech.speak(markdownToSpeech(text));
     reactor.setLevelSource(micStream ? micLevel : null);
   }
 

@@ -196,6 +196,7 @@ export function createApp(deps: {
         ...publicUser(user, (await store.getTenant(user.tenantId))?.name ?? ''),
         brain: brain.name,
         search: embedder ? 'meaning' : 'keywords',
+        web: !!web,
       };
     },
 
@@ -240,8 +241,31 @@ export function createApp(deps: {
         await store.audit(user.tenantId, user.id, 'error', { error: String(err) });
         throw new HttpError(502, err instanceof Error ? err.message : 'The AI brain failed.');
       }
-      await store.addMessage(user.tenantId, conversationId, 'assistant', result.reply);
+      await store.addMessage(user.tenantId, conversationId, 'assistant', result.reply, {
+        sources: result.sources,
+        toolsUsed: result.toolsUsed,
+      });
       return { conversationId, ...result };
+    },
+
+    'GET /api/conversations': async (ctx) => {
+      const user = await requireUser(ctx);
+      return { conversations: await store.listConversations(user.tenantId, user.id) };
+    },
+
+    'GET /api/conversation': async (ctx) => {
+      const user = await requireUser(ctx);
+      const id = ctx.url.searchParams.get('id') ?? '';
+      if (!(await store.ownsConversation(user.tenantId, user.id, id))) throw new HttpError(404, 'Conversation not found.');
+      return { conversationId: id, messages: await store.getMessages(user.tenantId, id, 200) };
+    },
+
+    'DELETE /api/conversation': async (ctx) => {
+      const user = await requireUser(ctx);
+      const id = ctx.url.searchParams.get('id') ?? '';
+      if (!(await store.deleteConversation(user.tenantId, user.id, id))) throw new HttpError(404, 'Conversation not found.');
+      await store.audit(user.tenantId, user.id, 'conversation_deleted', { id });
+      return { ok: true };
     },
 
     'POST /api/conversations': async (ctx) => {

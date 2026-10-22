@@ -1,9 +1,10 @@
 // The browser app: sign-in, chat with voice, documents, and the admin page.
 // Plain JavaScript with no build step. Everything shown is set with
-// textContent, never innerHTML, so text from the AI or a document cannot
-// inject markup into the page.
+// textContent or built as DOM nodes (web/markdown.js), never innerHTML, so
+// text from the AI, a document or a web page cannot inject markup.
 
 import { mountJarvis } from './jarvis.js';
+import { copyText, hostOf, markdownToSpeech, renderMarkdown } from './markdown.js';
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -73,17 +74,19 @@ async function showApp() {
   $('#app-view').hidden = false;
   $('#company-name').textContent = me.companyName;
   $('#user-name').textContent = me.name;
-  $('#brain-name').textContent = me.brain;
+  // Shows at a glance whether the agent can look things up live.
+  $('#brain-name').textContent = `${me.brain} · web search ${me.web ? 'on' : 'off'}`;
   for (const el of document.querySelectorAll('.admin-only')) el.hidden = me.role !== 'admin';
-  await loadHistory();
+  await loadConversations();
+  const latest = conversations[0];
+  if (latest) await openConversation(latest.id);
+  else startNewChat();
 }
 
-async function loadHistory() {
-  const history = await api('/api/history');
-  conversationId = history.conversationId;
-  $('#messages').replaceChildren();
-  for (const m of history.messages) addMessage(m.role, m.content);
-}
+// The chat fills the window below the top bar, whose height changes when it wraps on a phone.
+new ResizeObserver(([entry]) => {
+  document.documentElement.style.setProperty('--topbar-height', `${Math.ceil(entry.borderBoxSize[0].blockSize)}px`);
+}).observe($('.topbar'));
 
 // ── Tabs ──────────────────────────────────────────────────────────────────
 
@@ -95,7 +98,7 @@ for (const tab of document.querySelectorAll('.tab')) {
     if (tab.dataset.tab === 'jarvis') jarvis.show(me.companyName);
     else jarvis.hide();
     // Jarvis adds to the same conversation, so Chat re-reads it.
-    if (tab.dataset.tab === 'chat') loadHistory().catch((err) => showError('#app-error', err));
+    if (tab.dataset.tab === 'chat') refreshChat().catch((err) => showError('#app-error', err));
     if (tab.dataset.tab === 'documents') loadDocuments();
     if (tab.dataset.tab === 'admin') loadAdmin();
   });
@@ -110,51 +113,288 @@ const jarvis = mountJarvis({
   setConversationId: (id) => (conversationId = id),
 });
 
-// ── Chat ──────────────────────────────────────────────────────────────────
+// ── Chat: the list of chats ───────────────────────────────────────────────
 
-function addMessage(role, text, meta) {
-  const el = document.createElement('div');
-  el.className = `message ${role}`;
-  el.textContent = text;
-  if (meta) {
-    const small = document.createElement('small');
-    small.textContent = meta;
-    el.append(small);
-  }
-  $('#messages').append(el);
-  el.scrollIntoView({ block: 'end' });
-  return el;
+let conversations = [];
+
+async function loadConversations() {
+  conversations = (await api('/api/conversations')).conversations;
+  renderConversationList();
 }
+
+function renderConversationList() {
+  const list = $('#conversation-list');
+  list.replaceChildren();
+  if (conversations.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'muted sidebar-empty';
+    empty.textContent = 'No chats yet.';
+    list.append(empty);
+  }
+  for (const c of conversations) {
+    const row = document.createElement('div');
+    row.className = `conversation${c.id === conversationId ? ' active' : ''}`;
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'conversation-open';
+    open.textContent = c.title;
+    open.title = c.title;
+    open.addEventListener('click', () => {
+      openConversation(c.id).catch((err) => showError('#app-error', err));
+      closeSidebar();
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'conversation-delete';
+    remove.setAttribute('aria-label', `Delete chat: ${c.title}`);
+    remove.title = 'Delete chat';
+    remove.textContent = '×';
+    remove.addEventListener('click', async () => {
+      if (!confirm(`Delete "${c.title}"? This cannot be undone.`)) return;
+      try {
+        await api(`/api/conversation?id=${encodeURIComponent(c.id)}`, { method: 'DELETE' });
+        if (c.id === conversationId) startNewChat();
+        await loadConversations();
+      } catch (err) {
+        showError('#app-error', err);
+      }
+    });
+    row.append(open, remove);
+    list.append(row);
+  }
+}
+
+async function openConversation(id) {
+  const { messages } = await api(`/api/conversation?id=${encodeURIComponent(id)}`);
+  conversationId = id;
+  clearMessages();
+  for (const m of messages) {
+    if (m.role === 'user') addUserMessage(m.content);
+    else addAssistantMessage(m.content, m.meta ?? {});
+  }
+  setChatTitle();
+  renderConversationList();
+  scrollToEnd();
+}
+
+function startNewChat() {
+  // The server creates the conversation with its first message.
+  conversationId = null;
+  clearMessages();
+  setChatTitle();
+  renderConversationList();
+  $('#chat-input').focus();
+}
+
+/** Re-reads the open chat, which Jarvis may have added to. */
+async function refreshChat() {
+  await loadConversations();
+  if (conversationId) await openConversation(conversationId);
+}
+
+function setChatTitle() {
+  $('#chat-title').textContent = conversations.find((c) => c.id === conversationId)?.title ?? 'New chat';
+}
+
+$('#new-chat').addEventListener('click', () => {
+  startNewChat();
+  closeSidebar();
+});
+
+// On narrow screens the list of chats slides over the chat.
+$('#toggle-sidebar').addEventListener('click', () => {
+  const open = !$('#tab-chat').classList.contains('sidebar-open');
+  $('#tab-chat').classList.toggle('sidebar-open', open);
+  $('#toggle-sidebar').setAttribute('aria-expanded', String(open));
+});
+
+function closeSidebar() {
+  $('#tab-chat').classList.remove('sidebar-open');
+  $('#toggle-sidebar').setAttribute('aria-expanded', 'false');
+}
+
+// ── Chat: messages ────────────────────────────────────────────────────────
+
+const TOOL_LABELS = {
+  web_search: 'Searched the web',
+  read_web_page: 'Read a web page',
+  search_documents: 'Searched company documents',
+  save_note: 'Saved a note',
+  get_current_time: 'Checked the time',
+};
+
+function clearMessages() {
+  $('#messages').replaceChildren($('#empty-state'));
+  $('#empty-state').hidden = false;
+}
+
+function scrollToEnd() {
+  const box = $('#messages');
+  box.scrollTop = box.scrollHeight;
+}
+
+function addUserMessage(text) {
+  $('#empty-state').hidden = true;
+  const row = document.createElement('div');
+  row.className = 'msg msg-user';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = text;
+  row.append(bubble);
+  $('#messages').append(row);
+  scrollToEnd();
+  return row;
+}
+
+/** An answer: formatted text, then what the agent did, its sources, and actions. */
+function addAssistantMessage(text, { sources = [], toolsUsed = [] } = {}) {
+  $('#empty-state').hidden = true;
+  const row = document.createElement('div');
+  row.className = 'msg msg-assistant';
+
+  const steps = toolsUsed.map((t) => TOOL_LABELS[t]).filter(Boolean);
+  if (steps.length) {
+    const used = document.createElement('div');
+    used.className = 'steps';
+    used.textContent = steps.join(' · ');
+    row.append(used);
+  }
+
+  row.append(renderMarkdown(text, { sources }));
+
+  if (sources.length) {
+    const list = document.createElement('div');
+    list.className = 'sources';
+    for (const source of sources) {
+      const a = document.createElement('a');
+      a.className = 'source';
+      a.href = source.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.title = source.title;
+      const n = document.createElement('span');
+      n.className = 'source-n';
+      n.textContent = source.n;
+      const label = document.createElement('span');
+      label.className = 'source-label';
+      label.textContent = source.title === source.url ? hostOf(source.url) : source.title;
+      const host = document.createElement('span');
+      host.className = 'source-host';
+      host.textContent = hostOf(source.url);
+      a.append(n, label, host);
+      list.append(a);
+    }
+    row.append(list);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'msg-actions';
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'link';
+  copy.textContent = 'Copy';
+  copy.addEventListener('click', () => copyText(text, copy));
+  const listen = document.createElement('button');
+  listen.type = 'button';
+  listen.className = 'link';
+  listen.textContent = 'Read aloud';
+  listen.addEventListener('click', () => speak(text));
+  actions.append(copy, listen);
+  row.append(actions);
+
+  $('#messages').append(row);
+  return row;
+}
+
+function addTypingIndicator() {
+  const row = document.createElement('div');
+  row.className = 'msg msg-assistant';
+  const dots = document.createElement('div');
+  dots.className = 'typing';
+  dots.setAttribute('aria-label', 'The assistant is thinking');
+  dots.append(document.createElement('span'), document.createElement('span'), document.createElement('span'));
+  row.append(dots);
+  $('#messages').append(row);
+  scrollToEnd();
+  return row;
+}
+
+let sending = false;
 
 async function send(question) {
-  if (!question.trim()) return;
-  addMessage('user', question);
-  const thinking = addMessage('assistant pending', 'Thinking…');
+  question = question.trim();
+  if (!question || sending) return;
+  sending = true;
+  updateSendButton();
+  addUserMessage(question);
+  const typing = addTypingIndicator();
   try {
     const result = await api('/api/chat', { method: 'POST', body: { message: question, conversationId } });
+    const isNew = conversationId !== result.conversationId;
     conversationId = result.conversationId;
-    thinking.remove();
-    addMessage('assistant', result.reply, result.toolsUsed.length ? `used: ${result.toolsUsed.join(', ')}` : '');
+    typing.remove();
+    const answer = addAssistantMessage(result.reply, result);
+    // Show the start of the answer, scrolling the chat only (never the whole page).
+    const box = $('#messages');
+    box.scrollTo({ top: answer.offsetTop - box.offsetTop - 16, behavior: 'smooth' });
     if ($('#speak-replies').checked) speak(result.reply);
+    if (isNew) {
+      await loadConversations();
+      setChatTitle();
+    }
   } catch (err) {
-    thinking.remove();
-    addMessage('assistant error', err.message);
+    typing.remove();
+    const row = document.createElement('div');
+    row.className = 'msg msg-assistant msg-error';
+    row.textContent = err.message;
+    $('#messages').append(row);
+    scrollToEnd();
+  } finally {
+    sending = false;
+    updateSendButton();
   }
 }
+
+// ── Chat: the message box ─────────────────────────────────────────────────
+
+const input = $('#chat-input');
+
+function updateSendButton() {
+  $('#send').disabled = sending || !input.value.trim();
+}
+
+/** Grows with its text, up to a limit, like ChatGPT's box. */
+function autoGrow() {
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 200)}px`;
+}
+
+input.addEventListener('input', () => {
+  autoGrow();
+  updateSendButton();
+});
+
+// Enter sends; Shift+Enter starts a new line. Not while an IME is composing.
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    $('#chat-form').requestSubmit();
+  }
+});
 
 $('#chat-form').addEventListener('submit', (e) => {
   e.preventDefault();
-  const input = $('#chat-input');
   const question = input.value;
+  if (!question.trim() || sending) return;
   input.value = '';
+  autoGrow();
+  updateSendButton();
   send(question);
 });
 
-$('#new-chat').addEventListener('click', async () => {
-  const result = await api('/api/conversations', { method: 'POST', body: {} });
-  conversationId = result.conversationId;
-  $('#messages').replaceChildren();
-});
+for (const button of document.querySelectorAll('.suggestion')) {
+  button.addEventListener('click', () => send(button.textContent));
+}
 
 // ── Voice (the browser's own speech; Chrome and Edge) ─────────────────────
 
@@ -187,7 +427,7 @@ $('#mic').addEventListener('click', () => {
 function speak(text) {
   if (!('speechSynthesis' in window)) return;
   speechSynthesis.cancel();
-  speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  speechSynthesis.speak(new SpeechSynthesisUtterance(markdownToSpeech(text)));
 }
 
 // ── Documents ─────────────────────────────────────────────────────────────

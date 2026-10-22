@@ -80,6 +80,7 @@ test('the web tools are offered only when the server has a web search service', 
   assert.deepEqual(result.toolsUsed, ['web_search']);
   assert.match(result.reply, /Fresh fact\./);
   assert.match(brain.requests[0].system, /live web/);
+  assert.match(brain.requests[0].system, /before answering anything that could have changed/);
 
   // Asked for anyway without a service: refused and logged, never run.
   const sneaky = new MockBrain([{ text: '', toolCalls: [{ id: 'c', name: 'web_search', arguments: { query: 'x' } }] }, { text: 'done', toolCalls: [] }]);
@@ -101,4 +102,29 @@ test('an admin can turn web search off for their company', async () => {
 
 test('the agent is told today’s date', () => {
   assert.match(systemPrompt('Acme', 'Ann', { now: new Date('2026-10-22T12:00:00Z') }), /Today is Thursday, October 22, 2026/);
+});
+
+test('web results are numbered for citing, the same page keeps its number, and model citation codes are removed', async () => {
+  const store = await Store.open(':memory:');
+  const { user } = await store.createTenantWithAdmin({ companyName: 'Acme', email: 'a@a.test', name: 'Ann', passwordHash: 'x' });
+  const web: WebSearcher = {
+    name: 'fake',
+    search: async (q) =>
+      q === 'first'
+        ? [{ title: 'A', url: 'https://a.test', content: 'a' }, { title: 'B', url: 'https://b.test', content: 'b' }]
+        : [{ title: 'B again', url: 'https://b.test', content: 'b' }, { title: 'C', url: 'https://c.test', content: 'c' }],
+    read: async () => '',
+  };
+  const brain = new MockBrain([
+    { text: '', toolCalls: [{ id: '1', name: 'web_search', arguments: { query: 'first' } }] },
+    { text: '', toolCalls: [{ id: '2', name: 'web_search', arguments: { query: 'second' } }] },
+    { text: 'Fact one [1] and fact three [3]【web_search†result=0】.', toolCalls: [] },
+  ]);
+  const result = await runAgent({ brain, store, web, user, companyName: 'Acme', history: [], question: 'q' });
+
+  assert.deepEqual(result.sources.map((s) => [s.n, s.url]), [[1, 'https://a.test'], [2, 'https://b.test'], [3, 'https://c.test']]);
+  assert.equal(result.reply, 'Fact one [1] and fact three [3].');
+  assert.deepEqual(result.toolsUsed, ['web_search'], 'listed once, however many searches');
+  const secondSearch = brain.requests[2].messages.at(-1);
+  assert.match(secondSearch?.role === 'tool' ? secondSearch.content : '', /<web_result n="2" title="B again"/);
 });

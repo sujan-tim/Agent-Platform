@@ -30,10 +30,31 @@ export interface User {
   role: 'admin' | 'member';
 }
 
+/** A web page an answer drew on; answers cite it as [n]. */
+export interface Source {
+  n: number;
+  title: string;
+  url: string;
+}
+
+/** What is kept alongside an answer, so a reloaded conversation shows its sources. */
+export interface MessageMeta {
+  sources?: Source[];
+  toolsUsed?: string[];
+}
+
 export interface StoredMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
+  meta?: MessageMeta;
+}
+
+export interface ConversationSummary {
+  id: string;
+  /** The first question, shortened. */
+  title: string;
+  updatedAt: string;
 }
 
 export interface Document {
@@ -117,6 +138,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   event TEXT NOT NULL,
   detail JSONB NOT NULL
 );
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS meta JSONB;
 CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages (tenant_id, conversation_id, id);
 CREATE INDEX IF NOT EXISTS conversations_by_user ON conversations (tenant_id, user_id, seq);
 CREATE INDEX IF NOT EXISTS documents_by_tenant ON documents (tenant_id);
@@ -239,20 +261,59 @@ export class Store {
     return row?.id;
   }
 
-  async addMessage(tenantId: string, conversationId: string, role: StoredMessage['role'], content: string): Promise<void> {
+  async addMessage(
+    tenantId: string,
+    conversationId: string,
+    role: StoredMessage['role'],
+    content: string,
+    meta?: MessageMeta,
+  ): Promise<void> {
     await this.db.query(
-      'INSERT INTO messages (tenant_id, conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)',
-      [tenantId, conversationId, role, content, now()],
+      'INSERT INTO messages (tenant_id, conversation_id, role, content, created_at, meta) VALUES ($1, $2, $3, $4, $5, $6)',
+      [tenantId, conversationId, role, content, now(), meta ? JSON.stringify(meta) : null],
     );
+  }
+
+  /** This person's conversations that have messages, most recently active first. */
+  async listConversations(tenantId: string, userId: string, limit = 50): Promise<ConversationSummary[]> {
+    const rows = await this.db.query<{ id: string; title: string | null; updated_at: string }>(
+      `SELECT c.id,
+              (SELECT m.content FROM messages m WHERE m.tenant_id = c.tenant_id AND m.conversation_id = c.id AND m.role = 'user' ORDER BY m.id LIMIT 1) AS title,
+              last.created_at AS updated_at
+       FROM conversations c
+       JOIN LATERAL (SELECT m.id, m.created_at FROM messages m WHERE m.tenant_id = c.tenant_id AND m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1) last ON true
+       WHERE c.tenant_id = $1 AND c.user_id = $2
+       ORDER BY last.id DESC
+       LIMIT $3`,
+      [tenantId, userId, limit],
+    );
+    return rows.map((r) => ({ id: r.id, title: shorten(r.title ?? 'New chat', 60), updatedAt: r.updated_at }));
+  }
+
+  /** Deletes one of this person's conversations and its messages. False if it is not theirs. */
+  async deleteConversation(tenantId: string, userId: string, conversationId: string): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const owned = await tx.query('SELECT 1 FROM conversations WHERE tenant_id = $1 AND user_id = $2 AND id = $3', [
+        tenantId,
+        userId,
+        conversationId,
+      ]);
+      if (owned.length === 0) return false;
+      await tx.query('DELETE FROM messages WHERE tenant_id = $1 AND conversation_id = $2', [tenantId, conversationId]);
+      await tx.query('DELETE FROM conversations WHERE tenant_id = $1 AND id = $2', [tenantId, conversationId]);
+      return true;
+    });
   }
 
   /** The most recent `limit` messages, oldest first. */
   async getMessages(tenantId: string, conversationId: string, limit = 50): Promise<StoredMessage[]> {
-    const rows = await this.db.query<{ role: StoredMessage['role']; content: string; created_at: string }>(
-      'SELECT role, content, created_at FROM messages WHERE tenant_id = $1 AND conversation_id = $2 ORDER BY id DESC LIMIT $3',
+    const rows = await this.db.query<{ role: StoredMessage['role']; content: string; created_at: string; meta: MessageMeta | null }>(
+      'SELECT role, content, created_at, meta FROM messages WHERE tenant_id = $1 AND conversation_id = $2 ORDER BY id DESC LIMIT $3',
       [tenantId, conversationId, limit],
     );
-    return rows.reverse().map((r) => ({ role: r.role, content: r.content, createdAt: r.created_at }));
+    return rows
+      .reverse()
+      .map((r) => ({ role: r.role, content: r.content, createdAt: r.created_at, ...(r.meta && { meta: r.meta }) }));
   }
 
   // ── Documents and notes ─────────────────────────────────────────────────
@@ -440,6 +501,11 @@ export class Store {
     );
     return rows.map((r) => ({ at: r.at, userId: r.user_id, event: r.event, detail: r.detail }));
   }
+}
+
+function shorten(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
 }
 
 function insertUser(db: Queryable, user: User, passwordHash: string) {

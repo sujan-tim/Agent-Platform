@@ -19,6 +19,8 @@ export interface ToolContext {
   embedder?: Embedder;
   /** Present when the server has a web search service. */
   web?: WebSearcher;
+  /** Records a web page the answer may draw on and returns its number, for citing as [n]. */
+  cite?: (page: { title: string; url: string }) => number;
 }
 
 export interface Tool extends ToolSpec {
@@ -80,7 +82,7 @@ export const TOOLS: Tool[] = [
       },
       required: ['query'],
     },
-    run: async ({ web }, args) => {
+    run: async ({ web, cite }, args) => {
       const query = typeof args.query === 'string' ? args.query.trim().slice(0, 400) : '';
       if (!query) return 'No search query was given.';
       const days = typeof args.days === 'number' && args.days > 0 ? args.days : undefined;
@@ -88,10 +90,11 @@ export const TOOLS: Tool[] = [
       if (results.length === 0) return 'The web search found nothing for that query.';
       // Wrapped so the model reads it as material, not as instructions to follow.
       return results
-        .map(
-          (r) =>
-            `<web_result title="${attr(r.title)}" url="${attr(r.url)}"${r.publishedDate ? ` published="${attr(r.publishedDate)}"` : ''}>\n${r.content}\n</web_result>`,
-        )
+        .map((r) => {
+          const n = cite ? ` n="${cite(r)}"` : '';
+          const published = r.publishedDate ? ` published="${attr(r.publishedDate)}"` : '';
+          return `<web_result${n} title="${attr(r.title)}" url="${attr(r.url)}"${published}>\n${r.content}\n</web_result>`;
+        })
         .join('\n\n');
     },
   },
@@ -106,12 +109,13 @@ export const TOOLS: Tool[] = [
       properties: { url: { type: 'string', description: 'The full link of the page, starting with http:// or https://.' } },
       required: ['url'],
     },
-    run: async ({ web }, args) => {
+    run: async ({ web, cite }, args) => {
       const url = typeof args.url === 'string' ? args.url.trim() : '';
       if (!/^https?:\/\/\S+$/i.test(url)) return 'Give a full link starting with http:// or https://.';
       const text = await web!.read(url);
       const shown = text.length > MAX_PAGE_CHARS ? `${text.slice(0, MAX_PAGE_CHARS)}\n[…the rest of the page is cut off]` : text;
-      return `<web_page url="${attr(url)}">\n${shown}\n</web_page>`;
+      const n = cite ? ` n="${cite({ title: url, url })}"` : '';
+      return `<web_page${n} url="${attr(url)}">\n${shown}\n</web_page>`;
     },
   },
   {

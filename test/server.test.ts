@@ -123,3 +123,26 @@ test('passwords are hashed, not stored', async () => {
   assert.ok(verifyPassword('my long password', hash));
   assert.ok(!verifyPassword('wrong', hash));
 });
+
+test('chats are listed, reopened with their sources, and deleted, only by their owner', async () => {
+  const ann = client();
+  await ann('POST', '/api/login', { email: 'ann@acme.test', password: 'correct horse battery' });
+  const first = await ann('POST', '/api/chat', { message: 'first chat question' });
+  await ann('POST', '/api/chat', { message: 'second chat question' });
+
+  const list = (await ann('GET', '/api/conversations')).body.conversations;
+  assert.equal(list[0].title, 'second chat question', 'most recent first, titled by its first question');
+  assert.ok(list.some((c: any) => c.id === first.body.conversationId));
+
+  const opened = await ann('GET', `/api/conversation?id=${first.body.conversationId}`);
+  assert.deepEqual(opened.body.messages.map((m: any) => m.role), ['user', 'assistant']);
+  assert.deepEqual(opened.body.messages[1].meta, { sources: [], toolsUsed: [] });
+
+  const bob = client();
+  await bob('POST', '/api/login', { email: 'bob@bolt.test', password: 'another long password' });
+  assert.equal((await bob('GET', `/api/conversation?id=${first.body.conversationId}`)).status, 404);
+  assert.equal((await bob('DELETE', `/api/conversation?id=${first.body.conversationId}`)).status, 404);
+
+  assert.equal((await ann('DELETE', `/api/conversation?id=${first.body.conversationId}`)).status, 200);
+  assert.ok(!(await ann('GET', '/api/conversations')).body.conversations.some((c: any) => c.id === first.body.conversationId));
+});
