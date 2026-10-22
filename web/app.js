@@ -869,20 +869,131 @@ function renderTools(tools) {
   }
 }
 
+/** People waiting to join plus memories waiting to be accepted. */
+function setApprovalsCount(n) {
+  $('#approvals-count').textContent = n;
+  $('#approvals-count').hidden = n === 0;
+}
+
 async function refreshApprovalsCount() {
   try {
-    const { requests } = await api('/api/admin/access-requests');
-    $('#approvals-count').textContent = requests.length;
-    $('#approvals-count').hidden = requests.length === 0;
+    const [{ requests }, { pending }] = await Promise.all([api('/api/admin/access-requests'), api('/api/admin/memories')]);
+    setApprovalsCount(requests.length + pending.length);
   } catch {
     // The count is a convenience; the Approvals tab shows any error.
   }
 }
 
+// ── Master prompt and team memory ─────────────────────────────────────────
+
+function memoryCard(memory, actions) {
+  const card = document.createElement('div');
+  card.className = 'memory';
+  const body = document.createElement('div');
+  body.className = 'memory-body';
+  const textEl = document.createElement('span');
+  textEl.textContent = memory.text;
+  const meta = document.createElement('small');
+  meta.className = 'muted';
+  meta.textContent = `${memory.createdBy} · ${new Date(memory.createdAt).toLocaleDateString()}`;
+  body.append(textEl, meta);
+  card.append(body, ...actions);
+  return card;
+}
+
+function memoryButton(label, className, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = className;
+  b.textContent = label;
+  b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await onClick();
+    } catch (err) {
+      showError('#app-error', err);
+      b.disabled = false;
+    }
+  });
+  return b;
+}
+
+async function loadMemories() {
+  const { active, pending } = await api('/api/admin/memories');
+  const list = $('#memory-list');
+  list.replaceChildren();
+  if (active.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'muted empty-card';
+    empty.textContent = 'No team memory yet.';
+    list.append(empty);
+  }
+  for (const m of active) {
+    list.append(memoryCard(m, [memoryButton('Delete', 'link', async () => {
+      await api(`/api/admin/memories?id=${m.id}`, { method: 'DELETE' });
+      await loadMemories();
+    })]));
+  }
+  const suggestions = $('#memory-suggestions');
+  suggestions.replaceChildren();
+  if (pending.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'muted empty-card';
+    empty.textContent = 'No suggestions waiting.';
+    suggestions.append(empty);
+  }
+  for (const m of pending) {
+    const decide = (decision) => async () => {
+      await api('/api/admin/memories/decide', { method: 'POST', body: { id: m.id, decision } });
+      await Promise.all([loadMemories(), refreshApprovalsCount()]);
+    };
+    suggestions.append(memoryCard(m, [memoryButton('Approve', '', decide('approve')), memoryButton('Reject', 'secondary', decide('reject'))]));
+  }
+  return pending.length;
+}
+
+async function loadMasterPrompt() {
+  const { text, max } = await api('/api/admin/master-prompt');
+  $('#master-prompt').value = text;
+  $('#master-prompt').maxLength = max;
+  updateMasterCount();
+}
+
+function updateMasterCount() {
+  const box = $('#master-prompt');
+  $('#master-count').textContent = `${box.value.length} / ${box.maxLength}`;
+}
+
+$('#master-prompt').addEventListener('input', () => {
+  updateMasterCount();
+  $('#master-status').textContent = '';
+});
+
+$('#master-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/admin/master-prompt', { method: 'PUT', body: { text: $('#master-prompt').value } });
+    $('#master-status').textContent = '✓ Saved. New chats follow it.';
+  } catch (err) {
+    showError('#app-error', err);
+  }
+});
+
+$('#memory-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/admin/memories', { method: 'POST', body: formData(e.target) });
+    e.target.reset();
+    await loadMemories();
+  } catch (err) {
+    showError('#app-error', err);
+  }
+});
+
 async function loadAccessRequests() {
   const data = await api('/api/admin/access-requests');
-  $('#approvals-count').textContent = data.requests.length;
-  $('#approvals-count').hidden = data.requests.length === 0;
+  const waitingMemories = await loadMemories();
+  setApprovalsCount(data.requests.length + waitingMemories);
   const toggle = $('#access-toggle');
   toggle.checked = data.enabled;
   toggle.disabled = data.takenElsewhere;
@@ -955,7 +1066,7 @@ $('#access-toggle').addEventListener('change', async (e) => {
 
 async function loadAdmin() {
   try {
-    await loadSheetStatus();
+    await Promise.all([loadMasterPrompt(), loadMemories(), loadSheetStatus()]);
     renderTools((await api('/api/admin/tools')).tools);
     const { entries } = await api('/api/admin/audit');
     const body = $('#audit-table tbody');

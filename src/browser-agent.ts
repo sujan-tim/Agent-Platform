@@ -16,7 +16,7 @@
  */
 
 import type { Brain, ChatMessage, ToolCall, ToolSpec } from './brain/types.ts';
-import { cleanCitations, databaseBrief, databasePrompt } from './agent.ts';
+import { cleanCitations, companyGuidance, databaseBrief, databasePrompt, guidancePrompt } from './agent.ts';
 import type { CompanyDb } from './companydb.ts';
 import type { Embedder } from './embed.ts';
 import type { Source, Store, User } from './store.ts';
@@ -179,6 +179,7 @@ export async function browserStep(input: {
   const system = [
     browserSystemPrompt({ companyName: input.companyName, userName: user.name, canAct, web: serverTools.some((t) => t.needs === 'web') }),
     database ? `${databasePrompt(database)}\nWhen the person is on a company's website and asks to add or update it, read the facts from the page and propose them, with the page as the source.` : '',
+    guidancePrompt(await companyGuidance(store, tenantId)),
   ]
     .filter(Boolean)
     .join('\n');

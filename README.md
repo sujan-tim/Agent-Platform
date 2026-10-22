@@ -28,6 +28,10 @@ setting.
   reads the page, and works through it for you (clicks, typing, forms,
   moving between pages), asking before anything that sends, submits, buys or
   deletes. See [extension/README.md](extension/README.md).
+- **Master prompt and team memory.** Admins write standing instructions that
+  every chat, Jarvis and the extension follow (Admin → Master prompt). Anyone
+  can ask the agent to "remember for the team"; admins' memories apply at
+  once, members' wait in Approvals. Chats themselves stay private to each person.
 - **Private by default.** The sign-in page cannot create accounts. Admins
   add people, or approve requests from an optional "Request access" form.
   (`ALLOW_SIGNUP=true` reopens self-service company sign-up.)

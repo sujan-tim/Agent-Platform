@@ -87,6 +87,15 @@ export interface AccessRequest {
   createdAt: string;
 }
 
+/** Something the whole team's agent should know, e.g. "Maria now covers Mexico". */
+export interface TeamMemory {
+  id: number;
+  text: string;
+  status: 'active' | 'pending' | 'rejected';
+  createdBy: string;
+  createdAt: string;
+}
+
 export interface ConversationSummary {
   id: string;
   /** The first question, shortened. */
@@ -209,6 +218,22 @@ CREATE TABLE IF NOT EXISTS access_requests (
   decided_by TEXT,
   decided_at TEXT
 );
+CREATE TABLE IF NOT EXISTS tenant_settings (
+  tenant_id TEXT PRIMARY KEY REFERENCES tenants(id),
+  master_prompt TEXT NOT NULL DEFAULT '',
+  updated_by TEXT,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS team_memories (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  text TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'pending', 'rejected')),
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  decided_by TEXT,
+  decided_at TEXT
+);
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -223,6 +248,7 @@ CREATE INDEX IF NOT EXISTS conversations_by_user ON conversations (tenant_id, us
 CREATE INDEX IF NOT EXISTS documents_by_tenant ON documents (tenant_id);
 CREATE INDEX IF NOT EXISTS chunks_by_document ON document_chunks (tenant_id, document_id, position);
 CREATE INDEX IF NOT EXISTS audit_by_tenant ON audit_log (tenant_id, id);
+CREATE INDEX IF NOT EXISTS team_memories_by_tenant ON team_memories (tenant_id, status, id);
 CREATE INDEX IF NOT EXISTS access_requests_by_tenant ON access_requests (tenant_id, status, id);
 CREATE INDEX IF NOT EXISTS sheet_changes_by_status ON sheet_changes (tenant_id, status, id);
 `;
@@ -541,6 +567,53 @@ export class Store {
       [tenantId, userId],
     );
     return rows.map((r) => ({ text: r.text, createdAt: r.created_at }));
+  }
+
+  // ── The master prompt and team memory ───────────────────────────────────
+
+  /** The company's standing instructions for its agent, written by an admin ('' if none). */
+  async getMasterPrompt(tenantId: string): Promise<string> {
+    const [row] = await this.db.query<{ master_prompt: string }>('SELECT master_prompt FROM tenant_settings WHERE tenant_id = $1', [tenantId]);
+    return row?.master_prompt ?? '';
+  }
+
+  async setMasterPrompt(tenantId: string, userId: string, text: string): Promise<void> {
+    await this.db.query(
+      `INSERT INTO tenant_settings (tenant_id, master_prompt, updated_by, updated_at) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (tenant_id) DO UPDATE SET master_prompt = excluded.master_prompt, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+      [tenantId, text, userId, now()],
+    );
+  }
+
+  async addMemory(tenantId: string, userId: string, text: string, status: 'active' | 'pending'): Promise<number> {
+    const [row] = await this.db.query<{ id: number }>(
+      `INSERT INTO team_memories (tenant_id, text, status, created_by, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [tenantId, text, status, userId, now()],
+    );
+    return row.id;
+  }
+
+  /** Newest first, with who added each. */
+  async listMemories(tenantId: string, status: TeamMemory['status']): Promise<TeamMemory[]> {
+    const rows = await this.db.query<Record<string, any>>(
+      `SELECT m.id, m.text, m.status, m.created_at, u.name AS author FROM team_memories m
+       LEFT JOIN users u ON u.id = m.created_by AND u.tenant_id = m.tenant_id
+       WHERE m.tenant_id = $1 AND m.status = $2 ORDER BY m.id DESC LIMIT 200`,
+      [tenantId, status],
+    );
+    return rows.map((r) => ({ id: r.id, text: r.text, status: r.status, createdBy: r.author ?? 'someone', createdAt: r.created_at }));
+  }
+
+  async decideMemory(tenantId: string, id: number, userId: string, status: 'active' | 'rejected'): Promise<boolean> {
+    const rows = await this.db.query(
+      "UPDATE team_memories SET status = $1, decided_by = $2, decided_at = $3 WHERE tenant_id = $4 AND id = $5 AND status = 'pending' RETURNING id",
+      [status, userId, now(), tenantId, id],
+    );
+    return rows.length > 0;
+  }
+
+  async deleteMemory(tenantId: string, id: number): Promise<boolean> {
+    return (await this.db.query('DELETE FROM team_memories WHERE tenant_id = $1 AND id = $2 RETURNING id', [tenantId, id])).length > 0;
   }
 
   // ── Access requests ─────────────────────────────────────────────────────

@@ -13,7 +13,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { runAgent } from './agent.ts';
+import { MEMORIES_IN_PROMPT, runAgent } from './agent.ts';
 import { browserStep, MAX_SNAPSHOT_CHARS, type PageState } from './browser-agent.ts';
 import {
   clearedSessionCookie,
@@ -525,6 +525,57 @@ export function createApp(deps: {
       return publicUser(user, (await store.getTenant(admin.tenantId))?.name ?? '');
     },
 
+    // ── The master prompt and team memory (admins) ──
+
+    'GET /api/admin/master-prompt': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      return { text: await store.getMasterPrompt(admin.tenantId), max: MAX_MASTER_PROMPT };
+    },
+
+    'PUT /api/admin/master-prompt': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      const body = await readJson(ctx.req);
+      const value = typeof body.text === 'string' ? body.text.trim() : '';
+      if (value.length > MAX_MASTER_PROMPT) throw new HttpError(400, `The master prompt must be at most ${MAX_MASTER_PROMPT} characters.`);
+      await store.setMasterPrompt(admin.tenantId, admin.id, value);
+      await store.audit(admin.tenantId, admin.id, 'master_prompt_changed', { chars: value.length });
+      return { text: value };
+    },
+
+    'GET /api/admin/memories': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      const [active, pending] = await Promise.all([store.listMemories(admin.tenantId, 'active'), store.listMemories(admin.tenantId, 'pending')]);
+      return { active, pending, inPrompt: MEMORIES_IN_PROMPT };
+    },
+
+    'POST /api/admin/memories': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      const body = await readJson(ctx.req);
+      const fact = text(body.text, 'The memory', 200);
+      await store.addMemory(admin.tenantId, admin.id, fact, 'active');
+      await store.audit(admin.tenantId, admin.id, 'memory_added', { fact, status: 'active' });
+      return { ok: true };
+    },
+
+    'POST /api/admin/memories/decide': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      const body = await readJson(ctx.req);
+      if (body.decision !== 'approve' && body.decision !== 'reject') throw new HttpError(400, '"decision" must be approve or reject.');
+      if (!(await store.decideMemory(admin.tenantId, Number(body.id), admin.id, body.decision === 'approve' ? 'active' : 'rejected'))) {
+        throw new HttpError(404, 'That memory is not waiting any more.');
+      }
+      await store.audit(admin.tenantId, admin.id, `memory_${body.decision === 'approve' ? 'approved' : 'rejected'}`, { id: Number(body.id) });
+      return { ok: true };
+    },
+
+    'DELETE /api/admin/memories': async (ctx) => {
+      const admin = await requireAdmin(ctx);
+      const id = Number(ctx.url.searchParams.get('id'));
+      if (!(await store.deleteMemory(admin.tenantId, id))) throw new HttpError(404, 'No such memory.');
+      await store.audit(admin.tenantId, admin.id, 'memory_deleted', { id });
+      return { ok: true };
+    },
+
     'GET /api/admin/access-requests': async (ctx) => {
       const admin = await requireAdmin(ctx);
       const receiver = await store.accessRequestsTenant();
@@ -629,6 +680,9 @@ function sheetIdFrom(text: string): string {
   if (!/^[\w-]{20,}$/.test(id)) throw new HttpError(400, 'Paste the sheet link, or the ID between /d/ and /edit in it.');
   return id;
 }
+
+/** Long enough for real guidance, short enough to leave room within free AI limits. */
+const MAX_MASTER_PROMPT = 2000;
 
 const MAX_BROWSER_BODY_BYTES = 400_000;
 const MAX_BROWSER_MESSAGES = 80;

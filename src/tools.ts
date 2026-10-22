@@ -413,6 +413,30 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'remember_for_team',
+    kind: 'write',
+    proposes: true,
+    description:
+      "Saves a short fact or instruction to the team memory, which every teammate's agent keeps in mind, e.g. \"Maria now covers Mexico\" or \"Quote prices in USD\". Use it only when the person asks you to remember something for the team. An admin's memory is saved at once; anyone else's waits for an admin to approve it.",
+    parameters: {
+      type: 'object',
+      properties: { fact: { type: 'string', description: 'The fact or instruction, in one short sentence.' } },
+      required: ['fact'],
+    },
+    run: async ({ store, tenantId, userId }, args) => {
+      const fact = typeof args.fact === 'string' ? args.fact.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+      if (!fact) return 'Nothing to remember: the fact was empty.';
+      const known = [...(await store.listMemories(tenantId, 'active')), ...(await store.listMemories(tenantId, 'pending'))];
+      if (known.some((m) => m.text.toLowerCase() === fact.toLowerCase())) return 'The team memory already has that.';
+      const admin = (await store.getUser(tenantId, userId))?.role === 'admin';
+      await store.addMemory(tenantId, userId, fact, admin ? 'active' : 'pending');
+      await store.audit(tenantId, userId, 'memory_added', { fact, status: admin ? 'active' : 'pending' });
+      return admin
+        ? `Saved to the team memory: "${fact}". Every teammate's agent now keeps it in mind.`
+        : `Sent for approval: "${fact}". It joins the team memory once an admin approves it in Approvals.`;
+    },
+  },
+  {
     name: 'save_note',
     kind: 'write',
     description: 'Saves a short note for this person, for example a reminder or a summary they asked to keep.',

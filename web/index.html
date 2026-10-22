@@ -170,6 +170,10 @@
         <label class="toggle-row"><input type="checkbox" id="access-toggle" /> Show “Register” on the sign-in page</label>
         <p id="access-note" class="muted"></p>
         <div id="access-list"></div>
+
+        <h2>Team memory suggestions</h2>
+        <p class="muted">Teammates asked the agent to remember these for everyone. Approved ones join the team memory.</p>
+        <div id="memory-suggestions"></div>
       </section>
 
       <section id="tab-documents" class="tab-panel" hidden>
@@ -195,6 +199,21 @@
       </section>
 
       <section id="tab-admin" class="tab-panel" hidden>
+        <h2>Master prompt</h2>
+        <p class="muted">Standing instructions every chat, Jarvis and the Chrome extension follow, for everyone in the company. For example: the languages to answer in, what your products are, the units your data uses, the tone to take.</p>
+        <form id="master-form" class="settings-card">
+          <textarea id="master-prompt" name="text" rows="6" maxlength="2000" placeholder="e.g. We sell starches and sweeteners to food makers. Net Sales is in USD and Volume in metric tonnes. Answer briefly, in English."></textarea>
+          <div class="settings-row"><span id="master-count" class="muted"></span><span id="master-status" class="muted" role="status"></span><button type="submit">Save</button></div>
+        </form>
+
+        <h2>Team memory</h2>
+        <p class="muted">Facts every teammate's agent keeps in mind. Anyone can ask the agent to "remember for the team"; admins' memories are saved at once, others wait in Approvals. The newest 30 are used.</p>
+        <form id="memory-form" class="inline">
+          <input name="text" maxlength="200" placeholder="e.g. Maria now covers Mexico" required />
+          <button type="submit">Add</button>
+        </form>
+        <div id="memory-list"></div>
+
         <h2>Tools</h2>
         <p class="muted">Read tools only look things up. Write tools change something and start turned off.</p>
         <table id="tool-table"><thead><tr><th>Tool</th><th>Kind</th><th>What it does</th><th>On</th></tr></thead><tbody></tbody></table>

@@ -714,3 +714,14 @@ button.secondary { background: var(--panel); color: var(--text); border: 1px sol
 .toggle-row { display: inline-flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0 1rem; padding: 0.55rem 0.8rem; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 .empty-card { padding: 1.25rem; text-align: center; border: 1px dashed var(--line-strong); border-radius: 12px; }
 .change { box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04); }
+
+/* Master prompt and team memory */
+.settings-card { padding: 1rem; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+.settings-card textarea { resize: vertical; min-height: 7rem; line-height: 1.5; }
+.settings-row { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.6rem; font-size: 0.82rem; }
+.settings-row button { margin-left: auto; }
+#memory-list, #memory-suggestions { display: flex; flex-direction: column; gap: 0.45rem; margin-top: 0.75rem; }
+.memory { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.8rem; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.memory-body { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.memory-body small { font-size: 0.75rem; }
+#memory-form { margin-top: 0.5rem; }
