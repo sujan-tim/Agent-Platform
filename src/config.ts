@@ -65,7 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ollamaUrl: env.OLLAMA_URL ?? 'http://localhost:11434',
     ollamaModel: env.OLLAMA_MODEL ?? 'llama3.1',
     anthropicModel: env.ANTHROPIC_MODEL ?? 'claude-opus-5-5',
-    groqModel: env.GROQ_MODEL ?? 'llama-3.3-70b-versatile',
+    groqModel: env.GROQ_MODEL ?? 'openai/gpt-oss-120b',
     embeddings,
     ollamaEmbedModel: env.OLLAMA_EMBED_MODEL ?? 'nomic-embed-text',
   };

@@ -55,7 +55,7 @@ export class OpenAICompatibleBrain implements Brain {
     } catch {
       throw new Error(`Could not reach ${this.service}. Check the server's internet connection.`);
     }
-    if (!res.ok) throw new Error(await describeError(this.service, res));
+    if (!res.ok) throw new Error(await describeError(this.service, this.model, res));
 
     const body = (await res.json()) as {
       choices?: Array<{ finish_reason?: string; message?: { content?: string | null; refusal?: string | null; tool_calls?: WireToolCall[] } }>;
@@ -98,7 +98,7 @@ export function toOpenAI(messages: ChatMessage[]): WireMessage[] {
 }
 
 /** Turns an error response into a sentence a person can act on. */
-async function describeError(service: string, res: Response): Promise<string> {
+async function describeError(service: string, model: string, res: Response): Promise<string> {
   const detail = await res.text();
   let message = detail;
   try {
@@ -107,6 +107,9 @@ async function describeError(service: string, res: Response): Promise<string> {
     // not JSON
   }
   if (res.status === 401) return `${service} rejected the API key. Check it in the server's settings.`;
+  if (res.status === 404 && /model/i.test(message)) {
+    return `${service} has no model "${model}"; it may have been retired. Set ${service.toUpperCase()}_MODEL to a current one.`;
+  }
   if (res.status === 429) {
     const wait = res.headers.get('retry-after');
     return `${service}'s free limit is used up for the moment. Try again ${wait ? `in ${wait} seconds` : 'in a minute'}.`;

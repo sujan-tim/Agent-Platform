@@ -14,11 +14,12 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      # The free AI: Groq. Change GROQ_MODEL to try another tool-capable model.
+      # The free AI: Groq. Change GROQ_MODEL to try another tool-capable model;
+      # Groq retires models often: console.groq.com/docs/deprecations lists replacements.
       - key: AI_PROVIDER
         value: groq
       - key: GROQ_MODEL
-        value: llama-3.3-70b-versatile
+        value: openai/gpt-oss-120b
       - key: GROQ_API_KEY
         sync: false
       # Neon's connection string (postgresql://…?sslmode=require).

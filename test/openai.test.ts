@@ -67,6 +67,8 @@ test('rate limits and bad keys become messages a person can act on', async () =>
   await assert.rejects(brain.respond({ system: '', messages: [{ role: 'user', content: 'q' }], tools: [] }), /free limit.*12 seconds/);
   responses.push({ status: 401, body: { error: { message: 'Invalid API Key' } } });
   await assert.rejects(brain.respond({ system: '', messages: [{ role: 'user', content: 'q' }], tools: [] }), /rejected the API key/);
+  responses.push({ status: 404, body: { error: { message: 'The model `some-model` does not exist or you do not have access to it.' } } });
+  await assert.rejects(brain.respond({ system: '', messages: [{ role: 'user', content: 'q' }], tools: [] }), /no model "some-model".*GROQ_MODEL/);
 });
 
 test('history: tool calls and their results map to the OpenAI format', () => {

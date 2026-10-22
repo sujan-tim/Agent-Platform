@@ -79,6 +79,7 @@ Render's **Logs** tab shows what the app printed.
 | `AI_PROVIDER=groq needs GROQ_API_KEY` | Add the key under Environment |
 | `groq rejected the API key` | The key was mistyped or deleted; make a new one |
 | `groq's free limit is used up` | Wait a minute; it resets. Many users at once need a paid plan |
+| `groq has no model "…"` | Groq retired that model. In Render → Environment, set `GROQ_MODEL` to the replacement listed at <https://console.groq.com/docs/deprecations> |
 | `password authentication failed` or `ENOTFOUND` | `DATABASE_URL` is wrong; copy it again from Neon |
 | `SESSION_SECRET must be set in production` | Add `SESSION_SECRET` with any long random text |
 
