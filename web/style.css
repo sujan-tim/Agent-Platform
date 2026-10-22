@@ -33,6 +33,7 @@ body {
 
 h1 { font-size: 1.6rem; margin: 0 0 1rem; }
 h2 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; }
+h3 { font-size: 1rem; margin: 0 0 0.25rem; }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1.5rem; }
 .narrow { max-width: 420px; margin: 8vh auto; }
@@ -98,8 +99,173 @@ th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var
 .inline { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .inline input, .inline select { flex: 1 1 160px; width: auto; }
 #document-list li { margin: 0.3rem 0; }
+#upload-form, #document-form { margin-top: 1.25rem; padding: 1rem; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+#upload-status { margin-left: 0.5rem; }
 
 @media (max-width: 600px) {
   .message { max-width: 95%; }
   .topbar nav { order: 3; flex-basis: 100%; }
+}
+
+/* ── Jarvis tab: a heads-up display, always dark, after the Jarvis project ── */
+
+.tab-panel.jarvis {
+  --jv-accent: #12908f;
+  --jv-cyan: #00e5ff;
+  --jv-bg: #01060c;
+  --jv-text: #cfefff;
+  position: relative;
+  max-width: none;
+  min-height: calc(100vh - 58px);
+  margin: 0;
+  padding: 1.25rem clamp(16px, 4vw, 48px) 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at center 40%, rgba(0, 229, 255, 0.07), transparent 60%),
+    var(--jv-bg);
+  color: var(--jv-text);
+  color-scheme: dark;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+/* Faint scanlines over the whole display. */
+.tab-panel.jarvis::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(0, 229, 255, 0.03) 0 1px, transparent 1px 3px);
+}
+.tab-panel.jarvis[hidden] { display: none; }
+
+.jv-corner { position: absolute; width: 38px; height: 38px; border: 1px solid color-mix(in srgb, var(--jv-cyan) 55%, transparent); }
+.jv-tl { top: 14px; left: 14px; border-right: 0; border-bottom: 0; }
+.jv-tr { top: 14px; right: 14px; border-left: 0; border-bottom: 0; }
+.jv-bl { bottom: 14px; left: 14px; border-right: 0; border-top: 0; }
+.jv-br { bottom: 14px; right: 14px; border-left: 0; border-top: 0; }
+
+.jv-top {
+  width: 100%;
+  max-width: 980px;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--jv-cyan);
+}
+.jv-title { font-weight: 600; }
+.jv-company { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jv-phase { color: var(--jv-accent); transition: color 400ms ease; }
+.jv-phase::before { content: '● '; }
+
+.jv-modes { display: inline-flex; border: 1px solid color-mix(in srgb, var(--jv-cyan) 45%, transparent); border-radius: 999px; padding: 3px; z-index: 1; }
+.jv-mode {
+  background: none;
+  color: color-mix(in srgb, var(--jv-text) 70%, transparent);
+  border-radius: 999px;
+  padding: 0.35rem 1.1rem;
+  font-family: inherit;
+  font-size: 0.78rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.jv-mode.active { background: color-mix(in srgb, var(--jv-cyan) 18%, transparent); color: var(--jv-cyan); }
+
+.jv-stage { display: flex; flex-direction: column; align-items: center; z-index: 1; }
+.jv-reactor { width: min(46vh, 78vw, 440px); aspect-ratio: 1; display: block; }
+.jv-voice-mode .jv-reactor { width: min(50vh, 86vw, 520px); cursor: pointer; }
+.jv-caption {
+  min-height: 1.5em;
+  margin: 0.25rem 0 0;
+  max-width: 680px;
+  text-align: center;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  color: var(--jv-accent);
+  transition: color 400ms ease;
+}
+
+.jv-log {
+  width: 100%;
+  max-width: 820px;
+  max-height: 32vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  z-index: 1;
+  scrollbar-color: color-mix(in srgb, var(--jv-cyan) 30%, transparent) transparent;
+}
+.jv-voice-mode .jv-log { max-height: 15vh; opacity: 0.75; }
+.jv-line {
+  padding: 0.55rem 0.8rem;
+  border-left: 2px solid color-mix(in srgb, var(--jv-cyan) 50%, transparent);
+  background: rgba(0, 229, 255, 0.04);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.jv-line.jv-user { border-left-color: rgba(207, 239, 255, 0.35); color: color-mix(in srgb, var(--jv-text) 80%, transparent); }
+.jv-who { display: block; font-size: 0.66rem; letter-spacing: 0.22em; text-transform: uppercase; color: var(--jv-cyan); opacity: 0.75; margin-bottom: 0.15rem; }
+.jv-line small { display: block; margin-top: 0.3rem; font-size: 0.72rem; opacity: 0.6; }
+
+.jv-prompt-form, .jv-voice-controls {
+  width: 100%;
+  max-width: 820px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  z-index: 1;
+}
+.jv-voice-controls { justify-content: center; }
+.jv-prompt-form[hidden], .jv-voice-controls[hidden] { display: none; }
+.jv-chevron { color: var(--jv-cyan); font-weight: 600; }
+.tab-panel.jarvis .jv-input {
+  flex: 1 1 240px;
+  width: auto;
+  background: rgba(0, 229, 255, 0.05);
+  border: 1px solid color-mix(in srgb, var(--jv-cyan) 40%, transparent);
+  border-radius: 6px;
+  color: var(--jv-text);
+  font-family: inherit;
+}
+.tab-panel.jarvis .jv-input:focus { outline: 2px solid color-mix(in srgb, var(--jv-cyan) 70%, transparent); outline-offset: 1px; }
+.tab-panel.jarvis button:not(.jv-mode):not(.link) {
+  background: color-mix(in srgb, var(--jv-cyan) 16%, transparent);
+  color: var(--jv-cyan);
+  border: 1px solid color-mix(in srgb, var(--jv-cyan) 50%, transparent);
+  font-family: inherit;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.8rem;
+}
+.tab-panel.jarvis button.link { color: var(--jv-cyan); font-family: inherit; font-size: 0.8rem; }
+.jv-check { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0; font-size: 0.8rem; color: color-mix(in srgb, var(--jv-text) 75%, transparent); }
+.jv-hint { flex-basis: 100%; text-align: center; font-size: 0.72rem; letter-spacing: 0.08em; opacity: 0.55; }
+.tab-panel.jarvis kbd { border: 1px solid currentColor; border-radius: 3px; padding: 0 0.3em; font-size: 0.7rem; opacity: 0.8; }
+
+/* A short power-up each time the tab opens. */
+.jv-booted .jv-stage { animation: jv-power 900ms ease-out; }
+.jv-booted .jv-top, .jv-booted .jv-modes { animation: jv-fade 700ms ease-out; }
+@keyframes jv-power {
+  0% { opacity: 0; transform: scale(0.82); filter: brightness(2.2); }
+  60% { opacity: 1; filter: brightness(1.4); }
+  100% { transform: scale(1); filter: none; }
+}
+@keyframes jv-fade { from { opacity: 0; transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) {
+  .jv-booted .jv-stage, .jv-booted .jv-top, .jv-booted .jv-modes { animation: none; }
+}
+
+@media (max-width: 600px) {
+  .jv-top { font-size: 0.62rem; letter-spacing: 0.14em; }
+  .jv-company { display: none; }
+  .jv-corner { display: none; }
 }

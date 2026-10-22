@@ -27,13 +27,19 @@ import {
 } from './auth.ts';
 import { createBrain, type Brain } from './brain/index.ts';
 import type { ChatMessage } from './brain/types.ts';
-import { type Config, loadConfig } from './config.ts';
+import { type Config, loadConfig, type TrustProxy } from './config.ts';
+import { createEmbedder, type Embedder, embedAllPending, embedPending } from './embed.ts';
+import { ExtractError, extractFileText } from './extract.ts';
+import { ADDRESS_LIMIT, EMAIL_LIMIT, type Limit, RateLimiter } from './ratelimit.ts';
 import { Store, type User } from './store.ts';
 import { findTool, toolStates } from './tools.ts';
 
 const WEB_DIR = fileURLToPath(new URL('../web/', import.meta.url));
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_DOCUMENT_CHARS = 200_000;
+const MAX_UPLOAD_BYTES = 10_000_000;
+// Uploads arrive as base64 inside JSON, which is a third larger than the file.
+const MAX_UPLOAD_BODY_BYTES = Math.ceil(MAX_UPLOAD_BYTES / 3) * 4 + 10_000;
 const HISTORY_MESSAGES = 20;
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -47,9 +53,17 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly headers: Record<string, string> = {},
   ) {
     super(message);
   }
+}
+
+function tooManyAttempts(retryAfterMs: number): HttpError {
+  const minutes = Math.max(1, Math.ceil(retryAfterMs / 60_000));
+  return new HttpError(429, `Too many attempts. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`, {
+    'retry-after': String(Math.ceil(retryAfterMs / 1000)),
+  });
 }
 
 interface Ctx {
@@ -59,19 +73,59 @@ interface Ctx {
   user?: User;
 }
 
-export function createApp(deps: { config: Config; store: Store; brain: Brain }): Server {
-  const { config, store, brain } = deps;
+export function createApp(deps: {
+  config: Config;
+  store: Store;
+  brain: Brain;
+  /** Turns on search by meaning; without it, search uses keywords. */
+  embedder?: Embedder;
+  /** Sign-in limits; tests pass small ones. */
+  limits?: { email: Limit; address: Limit };
+}): Server {
+  const { config, store, brain, embedder } = deps;
+  const emailLimiter = new RateLimiter(deps.limits?.email ?? EMAIL_LIMIT);
+  const addressLimiter = new RateLimiter(deps.limits?.address ?? ADDRESS_LIMIT);
 
-  const requireUser = (ctx: Ctx): User => {
+  /** Counts a sign-in or sign-up attempt from this address, refusing it once over the limit. */
+  const limitAddress = (ctx: Ctx) => {
+    const address = clientAddress(ctx.req, config.trustProxy);
+    const wait = addressLimiter.retryAfter(address);
+    if (wait > 0) throw tooManyAttempts(wait);
+    addressLimiter.record(address);
+  };
+
+  /**
+   * Embeds a company's new passages so they can be found by meaning. A
+   * failure is logged and reported, never fatal: the document is saved and
+   * keyword search still finds it; the next start-up retries.
+   */
+  const indexDocuments = async (user: User): Promise<'meaning' | 'keywords'> => {
+    if (!embedder) return 'keywords';
+    try {
+      await embedPending(store, embedder, user.tenantId);
+      return 'meaning';
+    } catch (err) {
+      await store.audit(user.tenantId, user.id, 'embedding_failed', { error: String(err) });
+      return 'keywords';
+    }
+  };
+
+  const addDocument = async (user: User, title: string, content: string, source: Record<string, unknown>) => {
+    const doc = await store.addDocument(user.tenantId, title, content);
+    await store.audit(user.tenantId, user.id, 'document_added', { title, chars: content.length, ...source });
+    return { id: doc.id, title: doc.title, chars: content.length, searchableBy: await indexDocuments(user) };
+  };
+
+  const requireUser = async (ctx: Ctx): Promise<User> => {
     const token = readCookie(ctx.req.headers.cookie, SESSION_COOKIE);
     const session = token && verifySession(token, config.sessionSecret);
-    const user = session ? store.getUser(session.tenantId, session.userId) : undefined;
+    const user = session ? await store.getUser(session.tenantId, session.userId) : undefined;
     if (!user) throw new HttpError(401, 'Please sign in.');
     return user;
   };
 
-  const requireAdmin = (ctx: Ctx): User => {
-    const user = requireUser(ctx);
+  const requireAdmin = async (ctx: Ctx): Promise<User> => {
+    const user = await requireUser(ctx);
     if (user.role !== 'admin') throw new HttpError(403, 'Only a company admin can do that.');
     return user;
   };
@@ -88,29 +142,44 @@ export function createApp(deps: { config: Config; store: Store; brain: Brain }):
   const routes: Record<string, Handler> = {
     'POST /api/signup': async (ctx) => {
       if (!config.allowSignup) throw new HttpError(403, 'Sign-up is turned off on this server.');
+      limitAddress(ctx);
       const body = await readJson(ctx.req);
       const companyName = text(body.companyName, 'Company name', 100);
       const name = text(body.name, 'Your name', 100);
       const email = emailAddress(body.email);
       const password = newPassword(body.password);
-      if (store.findUserForLogin(email)) throw new HttpError(409, 'That email already has an account. Sign in instead.');
-      const { tenant, user } = store.createTenantWithAdmin({ companyName, email, name, passwordHash: hashPassword(password) });
-      store.audit(tenant.id, user.id, 'company_created', { company: tenant.name });
+      if (await store.findUserForLogin(email)) throw new HttpError(409, 'That email already has an account. Sign in instead.');
+      const { tenant, user } = await store.createTenantWithAdmin({ companyName, email, name, passwordHash: hashPassword(password) });
+      await store.audit(tenant.id, user.id, 'company_created', { company: tenant.name });
       startSession(ctx.res, user);
       return publicUser(user, tenant.name);
     },
 
     'POST /api/login': async (ctx) => {
+      limitAddress(ctx);
       const body = await readJson(ctx.req);
-      const found = store.findUserForLogin(String(body.email ?? ''));
+      const email = String(body.email ?? '').trim().toLowerCase();
+      // Checked before the password, so a locked-out guess is never tested.
+      const wait = emailLimiter.retryAfter(email);
+      if (wait > 0) throw tooManyAttempts(wait);
+      const found = await store.findUserForLogin(email);
       // The same message whether the email or the password was wrong.
       if (!found || !verifyPassword(String(body.password ?? ''), found.passwordHash)) {
+        emailLimiter.record(email);
+        if (found) await store.audit(found.tenantId, found.id, 'sign_in_failed');
         throw new HttpError(401, 'Email or password is incorrect.');
       }
+      emailLimiter.clear(email);
       const { passwordHash: _, ...user } = found;
-      store.audit(user.tenantId, user.id, 'signed_in');
+      await store.audit(user.tenantId, user.id, 'signed_in');
       startSession(ctx.res, user);
-      return publicUser(user, store.getTenant(user.tenantId)?.name ?? '');
+      return publicUser(user, (await store.getTenant(user.tenantId))?.name ?? '');
+    },
+
+    /** For the host's health check: the server is up and the database answers. */
+    'GET /api/health': async () => {
+      await store.ping();
+      return { ok: true };
     },
 
     'POST /api/logout': (ctx) => {
@@ -118,115 +187,147 @@ export function createApp(deps: { config: Config; store: Store; brain: Brain }):
       return { ok: true };
     },
 
-    'GET /api/me': (ctx) => {
-      const user = requireUser(ctx);
-      return { ...publicUser(user, store.getTenant(user.tenantId)?.name ?? ''), brain: brain.name };
+    'GET /api/me': async (ctx) => {
+      const user = await requireUser(ctx);
+      return {
+        ...publicUser(user, (await store.getTenant(user.tenantId))?.name ?? ''),
+        brain: brain.name,
+        search: embedder ? 'meaning' : 'keywords',
+      };
     },
 
-    'GET /api/history': (ctx) => {
-      const user = requireUser(ctx);
-      const conversationId = store.latestConversation(user.tenantId, user.id);
-      return { conversationId: conversationId ?? null, messages: conversationId ? store.getMessages(user.tenantId, conversationId) : [] };
+    'GET /api/history': async (ctx) => {
+      const user = await requireUser(ctx);
+      const conversationId = await store.latestConversation(user.tenantId, user.id);
+      return {
+        conversationId: conversationId ?? null,
+        messages: conversationId ? await store.getMessages(user.tenantId, conversationId) : [],
+      };
     },
 
     'POST /api/chat': async (ctx) => {
-      const user = requireUser(ctx);
+      const user = await requireUser(ctx);
       const body = await readJson(ctx.req);
       const question = text(body.message, 'Message', 8000);
       let conversationId = typeof body.conversationId === 'string' ? body.conversationId : '';
-      if (conversationId && !store.ownsConversation(user.tenantId, user.id, conversationId)) {
+      if (conversationId && !(await store.ownsConversation(user.tenantId, user.id, conversationId))) {
         throw new HttpError(404, 'Conversation not found.');
       }
-      if (!conversationId) conversationId = store.createConversation(user.tenantId, user.id);
+      if (!conversationId) conversationId = await store.createConversation(user.tenantId, user.id);
 
-      const history: ChatMessage[] = store
-        .getMessages(user.tenantId, conversationId, HISTORY_MESSAGES)
-        .map((m) => ({ role: m.role, content: m.content }));
-      store.addMessage(user.tenantId, conversationId, 'user', question);
+      const history: ChatMessage[] = (await store.getMessages(user.tenantId, conversationId, HISTORY_MESSAGES)).map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+      await store.addMessage(user.tenantId, conversationId, 'user', question);
 
       let result;
       try {
         result = await runAgent({
           brain,
           store,
+          embedder,
           user,
-          companyName: store.getTenant(user.tenantId)?.name ?? 'your company',
+          companyName: (await store.getTenant(user.tenantId))?.name ?? 'your company',
           history,
           question,
         });
       } catch (err) {
-        store.audit(user.tenantId, user.id, 'error', { error: String(err) });
+        await store.audit(user.tenantId, user.id, 'error', { error: String(err) });
         throw new HttpError(502, err instanceof Error ? err.message : 'The AI brain failed.');
       }
-      store.addMessage(user.tenantId, conversationId, 'assistant', result.reply);
+      await store.addMessage(user.tenantId, conversationId, 'assistant', result.reply);
       return { conversationId, ...result };
     },
 
-    'POST /api/conversations': (ctx) => {
-      const user = requireUser(ctx);
-      return { conversationId: store.createConversation(user.tenantId, user.id) };
+    'POST /api/conversations': async (ctx) => {
+      const user = await requireUser(ctx);
+      return { conversationId: await store.createConversation(user.tenantId, user.id) };
     },
 
-    'GET /api/documents': (ctx) => {
-      const user = requireUser(ctx);
-      return { documents: store.listDocuments(user.tenantId) };
+    'GET /api/documents': async (ctx) => {
+      const user = await requireUser(ctx);
+      return { documents: await store.listDocuments(user.tenantId) };
     },
 
     'POST /api/documents': async (ctx) => {
-      const user = requireAdmin(ctx);
+      const user = await requireAdmin(ctx);
       const body = await readJson(ctx.req);
       const title = text(body.title, 'Title', 200);
       const content = text(body.text, 'Document text', MAX_DOCUMENT_CHARS);
-      const doc = store.addDocument(user.tenantId, title, content);
-      store.audit(user.tenantId, user.id, 'document_added', { title, chars: content.length });
-      return { id: doc.id, title: doc.title };
+      return addDocument(user, title, content, { source: 'pasted' });
     },
 
-    'DELETE /api/documents': (ctx) => {
-      const user = requireAdmin(ctx);
+    /** A PDF, Word, text or Markdown file, sent as base64 in JSON so the JSON-only rule still guards it. */
+    'POST /api/documents/upload': async (ctx) => {
+      const user = await requireAdmin(ctx);
+      const body = await readJson(ctx.req, MAX_UPLOAD_BODY_BYTES);
+      const filename = text(body.filename, 'File name', 255);
+      const data = Buffer.from(typeof body.data === 'string' ? body.data : '', 'base64');
+      if (data.length === 0) throw new HttpError(400, 'The file is empty.');
+      if (data.length > MAX_UPLOAD_BYTES) throw new HttpError(413, `Files must be at most ${MAX_UPLOAD_BYTES / 1_000_000} MB.`);
+      let extracted;
+      try {
+        extracted = await extractFileText(filename, data);
+      } catch (err) {
+        if (err instanceof ExtractError) throw new HttpError(400, err.message);
+        throw err;
+      }
+      if (extracted.text.length > MAX_DOCUMENT_CHARS) {
+        throw new HttpError(400, `That file has ${extracted.text.length.toLocaleString('en')} characters of text; the limit is ${MAX_DOCUMENT_CHARS.toLocaleString('en')}. Split it into smaller files.`);
+      }
+      const title =
+        typeof body.title === 'string' && body.title.trim()
+          ? text(body.title, 'Title', 200)
+          : filename.replace(/\.[^.]+$/, '').slice(0, 200);
+      return addDocument(user, title, extracted.text, { source: extracted.kind, filename, bytes: data.length });
+    },
+
+    'DELETE /api/documents': async (ctx) => {
+      const user = await requireAdmin(ctx);
       const id = ctx.url.searchParams.get('id') ?? '';
-      if (!store.deleteDocument(user.tenantId, id)) throw new HttpError(404, 'Document not found.');
-      store.audit(user.tenantId, user.id, 'document_deleted', { id });
+      if (!(await store.deleteDocument(user.tenantId, id))) throw new HttpError(404, 'Document not found.');
+      await store.audit(user.tenantId, user.id, 'document_deleted', { id });
       return { ok: true };
     },
 
-    'GET /api/notes': (ctx) => {
-      const user = requireUser(ctx);
-      return { notes: store.listNotes(user.tenantId, user.id) };
+    'GET /api/notes': async (ctx) => {
+      const user = await requireUser(ctx);
+      return { notes: await store.listNotes(user.tenantId, user.id) };
     },
 
-    'GET /api/admin/tools': (ctx) => {
-      const user = requireAdmin(ctx);
-      return { tools: toolStates(store, user.tenantId) };
+    'GET /api/admin/tools': async (ctx) => {
+      const user = await requireAdmin(ctx);
+      return { tools: await toolStates(store, user.tenantId) };
     },
 
     'PUT /api/admin/tools': async (ctx) => {
-      const user = requireAdmin(ctx);
+      const user = await requireAdmin(ctx);
       const body = await readJson(ctx.req);
       const tool = findTool(String(body.name ?? ''));
       if (!tool) throw new HttpError(404, 'No such tool.');
       if (typeof body.enabled !== 'boolean') throw new HttpError(400, '"enabled" must be true or false.');
-      store.setToolEnabled(user.tenantId, tool.name, body.enabled);
-      store.audit(user.tenantId, user.id, 'tool_setting_changed', { tool: tool.name, enabled: body.enabled });
-      return { tools: toolStates(store, user.tenantId) };
+      await store.setToolEnabled(user.tenantId, tool.name, body.enabled);
+      await store.audit(user.tenantId, user.id, 'tool_setting_changed', { tool: tool.name, enabled: body.enabled });
+      return { tools: await toolStates(store, user.tenantId) };
     },
 
     'POST /api/admin/users': async (ctx) => {
-      const admin = requireAdmin(ctx);
+      const admin = await requireAdmin(ctx);
       const body = await readJson(ctx.req);
       const email = emailAddress(body.email);
       const name = text(body.name, 'Name', 100);
       const password = newPassword(body.password);
       const role = body.role === 'admin' ? 'admin' : 'member';
-      if (store.findUserForLogin(email)) throw new HttpError(409, 'That email already has an account.');
-      const user = store.addUser(admin.tenantId, { email, name, role, passwordHash: hashPassword(password) });
-      store.audit(admin.tenantId, admin.id, 'user_added', { email, role });
-      return publicUser(user, store.getTenant(admin.tenantId)?.name ?? '');
+      if (await store.findUserForLogin(email)) throw new HttpError(409, 'That email already has an account.');
+      const user = await store.addUser(admin.tenantId, { email, name, role, passwordHash: hashPassword(password) });
+      await store.audit(admin.tenantId, admin.id, 'user_added', { email, role });
+      return publicUser(user, (await store.getTenant(admin.tenantId))?.name ?? '');
     },
 
-    'GET /api/admin/audit': (ctx) => {
-      const user = requireAdmin(ctx);
-      return { entries: store.getAudit(user.tenantId) };
+    'GET /api/admin/audit': async (ctx) => {
+      const user = await requireAdmin(ctx);
+      return { entries: await store.getAudit(user.tenantId) };
     },
   };
 
@@ -249,6 +350,7 @@ export function createApp(deps: { config: Config; store: Store; brain: Brain }):
       }
     } catch (err) {
       if (err instanceof HttpError) {
+        for (const [name, value] of Object.entries(err.headers)) res.setHeader(name, value);
         sendJson(res, err.status, { error: err.message });
       } else {
         console.error(err);
@@ -264,16 +366,32 @@ function publicUser(user: User, companyName: string) {
   return { id: user.id, name: user.name, email: user.email, role: user.role, companyName };
 }
 
+/**
+ * The visitor's network address. Behind a proxy every request comes from the
+ * proxy, so its header names the real visitor. With `local` the header is
+ * believed only from this machine (a tunnel), since anyone else could send it
+ * to dodge the sign-in limits; `all` is for hosts where the proxy is the only
+ * way in.
+ */
+function clientAddress(req: IncomingMessage, trustProxy: TrustProxy): string {
+  const socket = req.socket.remoteAddress ?? 'unknown';
+  const local = socket === '127.0.0.1' || socket === '::1' || socket === '::ffff:127.0.0.1';
+  if (trustProxy === 'off' || (trustProxy === 'local' && !local)) return socket;
+  const forwarded = req.headers['cf-connecting-ip'] ?? req.headers['x-forwarded-for'];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0].trim();
+  return first || socket;
+}
+
 function isJson(req: IncomingMessage): boolean {
   return (req.headers['content-type'] ?? '').split(';')[0].trim() === 'application/json';
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'That request is too large.');
+    if (size > maxBytes) throw new HttpError(413, 'That request is too large.');
     chunks.push(chunk as Buffer);
   }
   try {
@@ -333,16 +451,52 @@ async function serveStatic(pathname: string, res: ServerResponse): Promise<void>
 
 // ── Entry point ───────────────────────────────────────────────────────────
 
-function main(): void {
-  if (existsSync('.env')) process.loadEnvFile('.env');
-  const config = loadConfig();
-  const store = new Store(config.dbPath);
-  const brain = createBrain(config);
-  createApp({ config, store, brain }).listen(config.port, () => {
-    console.log(`Agent Platform running at http://localhost:${config.port}`);
-    console.log(`AI brain: ${brain.name}`);
-    if (!process.env.SESSION_SECRET) console.log('No SESSION_SECRET set: sign-ins reset when the server restarts.');
-  });
+/** Names the database for the log without its connection string, which holds the password. */
+function describeDatabase(location: string): string {
+  if (!/^postgres/.test(location)) return `PGlite in ${location}`;
+  try {
+    return `Postgres at ${new URL(location).hostname}`;
+  } catch {
+    return 'Postgres';
+  }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+/** Where data lived before the move to Postgres; copied over once, on start-up. */
+const OLD_SQLITE_PATH = 'data/agent-platform.db';
+
+async function main(): Promise<void> {
+  if (existsSync('.env')) process.loadEnvFile('.env');
+  const config = loadConfig();
+  const store = await Store.open(config.database);
+  const imported = await store.importSqlite(OLD_SQLITE_PATH);
+  if (imported) {
+    console.log(`Copied the old SQLite database into ${describeDatabase(config.database)}:`, imported);
+    console.log(`${OLD_SQLITE_PATH} is no longer used; delete it once everything looks right.`);
+  }
+  const brain = createBrain(config);
+  const embedder = createEmbedder(config);
+  createApp({ config, store, brain, embedder }).listen(config.port, () => {
+    console.log(`Agent Platform running at http://localhost:${config.port}`);
+    console.log(`AI brain: ${brain.name}`);
+    console.log(`Database: ${describeDatabase(config.database)}`);
+    console.log(`Document search: ${embedder ? `by meaning (${embedder.model}) and keywords` : 'keywords'}`);
+    if (!process.env.SESSION_SECRET) console.log('No SESSION_SECRET set: sign-ins reset when the server restarts.');
+  });
+  // Check embeddings work, then catch up on passages added while they were off or failing.
+  if (embedder) {
+    embedder
+      .embed(['ping'], 'query')
+      .then(() => embedAllPending(store, embedder))
+      .then(
+        (n) => n > 0 && console.log(`Embedded ${n} document passage${n === 1 ? '' : 's'} for search by meaning.`),
+        (err) => console.warn(`Search by meaning is unavailable, using keywords: ${err instanceof Error ? err.message : err}`),
+      );
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

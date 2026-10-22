@@ -3,6 +3,8 @@
 // textContent, never innerHTML, so text from the AI or a document cannot
 // inject markup into the page.
 
+import { mountJarvis } from './jarvis.js';
+
 const $ = (selector) => document.querySelector(selector);
 
 let me = null;
@@ -73,6 +75,10 @@ async function showApp() {
   $('#user-name').textContent = me.name;
   $('#brain-name').textContent = me.brain;
   for (const el of document.querySelectorAll('.admin-only')) el.hidden = me.role !== 'admin';
+  await loadHistory();
+}
+
+async function loadHistory() {
   const history = await api('/api/history');
   conversationId = history.conversationId;
   $('#messages').replaceChildren();
@@ -86,10 +92,23 @@ for (const tab of document.querySelectorAll('.tab')) {
     for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t === tab);
     for (const panel of document.querySelectorAll('.tab-panel')) panel.hidden = panel.id !== `tab-${tab.dataset.tab}`;
     showError('#app-error');
+    if (tab.dataset.tab === 'jarvis') jarvis.show(me.companyName);
+    else jarvis.hide();
+    // Jarvis adds to the same conversation, so Chat re-reads it.
+    if (tab.dataset.tab === 'chat') loadHistory().catch((err) => showError('#app-error', err));
     if (tab.dataset.tab === 'documents') loadDocuments();
     if (tab.dataset.tab === 'admin') loadAdmin();
   });
 }
+
+// ── Jarvis (web/jarvis.js), sharing the Chat tab's conversation ───────────
+
+const jarvis = mountJarvis({
+  root: $('#tab-jarvis'),
+  api,
+  getConversationId: () => conversationId,
+  setConversationId: (id) => (conversationId = id),
+});
 
 // ── Chat ──────────────────────────────────────────────────────────────────
 
@@ -174,6 +193,10 @@ function speak(text) {
 // ── Documents ─────────────────────────────────────────────────────────────
 
 async function loadDocuments() {
+  $('#search-mode').textContent =
+    me.search === 'meaning'
+      ? 'Search finds passages by meaning as well as by matching words.'
+      : 'Search finds passages by matching words.';
   try {
     const { documents } = await api('/api/documents');
     const list = $('#document-list');
@@ -204,12 +227,49 @@ async function loadDocuments() {
   }
 }
 
-$('#document-file').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
+const MAX_UPLOAD_BYTES = 10_000_000;
+
+/** The file's bytes as base64, without the "data:…;base64," prefix. */
+function readAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',', 2)[1] ?? '');
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+$('#upload-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const file = form.elements.file.files[0];
   if (!file) return;
-  const form = $('#document-form');
-  form.elements.text.value = await file.text();
-  if (!form.elements.title.value) form.elements.title.value = file.name.replace(/\.[^.]+$/, '');
+  const status = $('#upload-status');
+  const button = form.querySelector('button');
+  showError('#app-error');
+  if (file.size > MAX_UPLOAD_BYTES) {
+    showError('#app-error', new Error('Files must be at most 10 MB.'));
+    return;
+  }
+  button.disabled = true;
+  status.textContent = 'Reading and indexing…';
+  try {
+    const result = await api('/api/documents/upload', {
+      method: 'POST',
+      body: { filename: file.name, title: form.elements.title.value, data: await readAsBase64(file) },
+    });
+    status.textContent = `Added "${result.title}" (${result.chars.toLocaleString()} characters).`;
+    if (me.search === 'meaning' && result.searchableBy !== 'meaning') {
+      status.textContent += ' Search by meaning is unavailable right now, so it is searchable by words for the moment.';
+    }
+    form.reset();
+    loadDocuments();
+  } catch (err) {
+    status.textContent = '';
+    showError('#app-error', err);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 $('#document-form').addEventListener('submit', async (e) => {

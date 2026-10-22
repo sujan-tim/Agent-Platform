@@ -9,7 +9,7 @@ import { createApp } from '../src/server.ts';
 import { Store } from '../src/store.ts';
 
 const config = loadConfig({ AI_PROVIDER: 'mock', SESSION_SECRET: 'test-secret' });
-const store = new Store(':memory:');
+const store = await Store.open(':memory:');
 const server = createApp({ config, store, brain: new MockBrain() });
 let base = '';
 
@@ -102,11 +102,12 @@ test('the web app is served, and nothing outside web/ is', async () => {
   const page = await fetch(`${base}/`);
   assert.equal(page.status, 200);
   assert.match(await page.text(), /Agent Platform/);
+  assert.equal((await fetch(`${base}/jarvis.js`)).status, 200);
   assert.equal((await fetch(`${base}/..%2Fpackage.json`)).status, 404);
   assert.equal((await fetch(`${base}/%2e%2e/src/server.ts`)).status, 404);
 });
 
-test('sessions: a tampered or expired token is rejected', () => {
+test('sessions: a tampered or expired token is rejected', async () => {
   const token = signSession({ tenantId: 't', userId: 'u', expiresAt: Date.now() + 1000 }, 'k');
   assert.ok(verifySession(token, 'k'));
   assert.equal(verifySession(token, 'other key'), null);
@@ -116,7 +117,7 @@ test('sessions: a tampered or expired token is rejected', () => {
   assert.equal(verifySession(`${payload}.${signature}`, 'k', Date.now() + 2000), null);
 });
 
-test('passwords are hashed, not stored', () => {
+test('passwords are hashed, not stored', async () => {
   const hash = hashPassword('my long password');
   assert.doesNotMatch(hash, /my long password/);
   assert.ok(verifyPassword('my long password', hash));

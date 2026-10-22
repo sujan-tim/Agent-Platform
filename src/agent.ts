@@ -8,6 +8,7 @@
  */
 
 import type { Brain, ChatMessage, ToolCall } from './brain/types.ts';
+import type { Embedder } from './embed.ts';
 import type { Store, User } from './store.ts';
 import { findTool, isToolAllowed, TOOLS } from './tools.ts';
 
@@ -31,6 +32,7 @@ export function systemPrompt(companyName: string, userName: string): string {
 export async function runAgent(input: {
   brain: Brain;
   store: Store;
+  embedder?: Embedder;
   user: User;
   companyName: string;
   /** Earlier messages in this conversation, oldest first. */
@@ -39,13 +41,13 @@ export async function runAgent(input: {
 }): Promise<AgentResult> {
   const { brain, store, user } = input;
   const tenantId = user.tenantId;
-  const settings = store.getToolSettings(tenantId);
+  const settings = await store.getToolSettings(tenantId);
   // Offer only the tools this company allows; the gate below checks again.
   const offered = TOOLS.filter((t) => isToolAllowed(t, settings));
   const messages: ChatMessage[] = [...input.history, { role: 'user', content: input.question }];
   const toolsUsed: string[] = [];
 
-  store.audit(tenantId, user.id, 'question', { brain: brain.name, text: input.question });
+  await store.audit(tenantId, user.id, 'question', { brain: brain.name, text: input.question });
 
   for (let step = 0; step < MAX_STEPS; step++) {
     const reply = await brain.respond({
@@ -55,22 +57,22 @@ export async function runAgent(input: {
     });
 
     if (reply.refused) {
-      store.audit(tenantId, user.id, 'refused', { text: reply.text });
+      await store.audit(tenantId, user.id, 'refused', { text: reply.text });
       return { reply: reply.text, toolsUsed };
     }
 
     if (reply.toolCalls.length === 0) {
-      store.audit(tenantId, user.id, 'answer', { text: reply.text, toolsUsed });
+      await store.audit(tenantId, user.id, 'answer', { text: reply.text, toolsUsed });
       return { reply: reply.text, toolsUsed };
     }
 
     messages.push({ role: 'assistant', content: reply.text, toolCalls: reply.toolCalls, raw: reply.raw });
     for (const call of reply.toolCalls) {
-      messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: runTool(input, settings, call, toolsUsed) });
+      messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: await runTool(input, settings, call, toolsUsed) });
     }
   }
 
-  store.audit(tenantId, user.id, 'gave_up', { steps: MAX_STEPS });
+  await store.audit(tenantId, user.id, 'gave_up', { steps: MAX_STEPS });
   return {
     reply: 'Sorry, I could not finish that request. Try asking in a simpler way.',
     toolsUsed,
@@ -78,29 +80,29 @@ export async function runAgent(input: {
 }
 
 /** The tool gate: unknown and disallowed tools are refused, never run. */
-function runTool(
-  { store, user }: { store: Store; user: User },
+async function runTool(
+  { store, embedder, user }: { store: Store; embedder?: Embedder; user: User },
   settings: Map<string, boolean>,
   call: ToolCall,
   toolsUsed: string[],
-): string {
+): Promise<string> {
   const tenantId = user.tenantId;
   const tool = findTool(call.name);
   if (!tool) {
-    store.audit(tenantId, user.id, 'tool_denied', { tool: call.name, reason: 'unknown tool' });
+    await store.audit(tenantId, user.id, 'tool_denied', { tool: call.name, reason: 'unknown tool' });
     return `There is no tool called ${call.name}.`;
   }
   if (!isToolAllowed(tool, settings)) {
-    store.audit(tenantId, user.id, 'tool_denied', { tool: tool.name, reason: 'turned off by company admin' });
+    await store.audit(tenantId, user.id, 'tool_denied', { tool: tool.name, reason: 'turned off by company admin' });
     return `The ${tool.name} tool is turned off by this company's admin. Tell the person it is unavailable.`;
   }
   try {
-    const result = tool.run({ store, tenantId, userId: user.id }, call.arguments);
+    const result = await tool.run({ store, tenantId, userId: user.id, embedder }, call.arguments);
     toolsUsed.push(tool.name);
-    store.audit(tenantId, user.id, 'tool_call', { tool: tool.name, arguments: call.arguments });
+    await store.audit(tenantId, user.id, 'tool_call', { tool: tool.name, arguments: call.arguments });
     return result;
   } catch (err) {
-    store.audit(tenantId, user.id, 'tool_error', { tool: tool.name, error: String(err) });
+    await store.audit(tenantId, user.id, 'tool_error', { tool: tool.name, error: String(err) });
     return `The ${tool.name} tool failed: ${String(err)}`;
   }
 }

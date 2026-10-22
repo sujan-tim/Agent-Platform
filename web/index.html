@@ -36,6 +36,7 @@
         <strong id="company-name"></strong>
         <nav>
           <button class="tab active" data-tab="chat">Chat</button>
+          <button class="tab" data-tab="jarvis">Jarvis</button>
           <button class="tab" data-tab="documents">Documents</button>
           <button class="tab admin-only" data-tab="admin">Admin</button>
         </nav>
@@ -56,14 +57,55 @@
         </div>
       </section>
 
+      <section id="tab-jarvis" class="tab-panel jarvis" hidden>
+        <div class="jv-corner jv-tl"></div><div class="jv-corner jv-tr"></div>
+        <div class="jv-corner jv-bl"></div><div class="jv-corner jv-br"></div>
+        <header class="jv-top">
+          <span class="jv-title">J.A.R.V.I.S</span>
+          <span class="jv-company"></span>
+          <span class="jv-phase" aria-live="polite"></span>
+        </header>
+        <div class="jv-modes" role="group" aria-label="Jarvis mode">
+          <button type="button" class="jv-mode" data-mode="prompt">Prompt</button>
+          <button type="button" class="jv-mode" data-mode="voice">Voice</button>
+        </div>
+        <div class="jv-stage">
+          <canvas class="jv-reactor" aria-label="Jarvis. In voice mode, click to talk." role="button" tabindex="-1"></canvas>
+          <p class="jv-caption" aria-live="polite"></p>
+        </div>
+        <div class="jv-log" aria-live="polite"></div>
+        <form class="jv-prompt-form">
+          <span class="jv-chevron" aria-hidden="true">&gt;</span>
+          <input class="jv-input" placeholder="Give Jarvis a command…" autocomplete="off" aria-label="Command" />
+          <button type="submit">Send</button>
+          <label class="jv-check"><input type="checkbox" class="jv-speak-replies" /> Speak replies</label>
+        </form>
+        <div class="jv-voice-controls" hidden>
+          <button type="button" class="jv-talk">Talk <kbd>Space</kbd></button>
+          <label class="jv-check"><input type="checkbox" class="jv-wake" /> Wake word "Hey Jarvis"</label>
+          <button type="button" class="jv-voice-name link"></button>
+          <span class="jv-hint">Talk over him to interrupt · <kbd>Esc</kbd> to stand down</span>
+        </div>
+      </section>
+
       <section id="tab-documents" class="tab-panel" hidden>
         <h2>Company documents</h2>
         <p class="muted">The agent searches these to answer questions. Only admins can add or remove them.</p>
+        <p id="search-mode" class="muted"></p>
         <ul id="document-list"></ul>
+        <form id="upload-form" class="admin-only">
+          <h3>Upload a file</h3>
+          <label>File (PDF, Word .docx, text or Markdown, up to 10 MB)
+            <input type="file" name="file" accept=".pdf,.docx,.txt,.md,.markdown,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown" required />
+          </label>
+          <label>Title (optional; the file name is used otherwise) <input name="title" /></label>
+          <button type="submit">Upload</button>
+          <span id="upload-status" class="muted" role="status"></span>
+        </form>
         <form id="document-form" class="admin-only">
+          <h3>…or paste text</h3>
           <label>Title <input name="title" required /></label>
           <label>Text <textarea name="text" rows="8" required placeholder="Paste a policy, manual or FAQ…"></textarea></label>
-          <label>…or load a .txt / .md file <input type="file" id="document-file" accept=".txt,.md,text/plain,text/markdown" /></label>
           <button type="submit">Add document</button>
         </form>
       </section>

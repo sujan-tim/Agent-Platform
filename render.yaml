@@ -1,0 +1,35 @@
+# Render blueprint: the hosted Agent Platform on Render's free plan.
+# Render reads this when you choose New → Blueprint and pick this repository.
+# DEPLOY.md walks through it. The two `sync: false` values are secrets that
+# Render asks you to paste in; they are never stored in this file.
+
+services:
+  - type: web
+    name: agent-platform
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # The free AI: Groq. Change GROQ_MODEL to try another tool-capable model.
+      - key: AI_PROVIDER
+        value: groq
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: GROQ_API_KEY
+        sync: false
+      # Neon's connection string (postgresql://…?sslmode=require).
+      - key: DATABASE_URL
+        sync: false
+      # No Ollama on Render, so search uses keywords.
+      - key: EMBEDDINGS
+        value: "off"
+      # Render's proxy is the only way in, so its visitor-address header is trusted.
+      - key: TRUST_PROXY
+        value: all
+      # Signs sign-in cookies; Render generates a long random value once.
+      - key: SESSION_SECRET
+        generateValue: true

@@ -9,21 +9,29 @@
 
 import { randomBytes } from 'node:crypto';
 
-export type ProviderName = 'ollama' | 'mock' | 'anthropic';
+export type ProviderName = 'ollama' | 'mock' | 'anthropic' | 'groq';
+/** Whose word to take for the visitor's address: nobody's, a proxy on this machine's, or any proxy's. */
+export type TrustProxy = 'off' | 'local' | 'all';
+export type EmbeddingsName = 'ollama' | 'off';
 
 export interface Config {
   port: number;
-  dbPath: string;
+  /** A postgres:// URL (hosted), or a folder for PGlite (on a laptop). */
+  database: string;
   production: boolean;
   sessionSecret: string;
   allowSignup: boolean;
+  trustProxy: TrustProxy;
   provider: ProviderName;
   ollamaUrl: string;
   ollamaModel: string;
   anthropicModel: string;
+  groqModel: string;
+  embeddings: EmbeddingsName;
+  ollamaEmbedModel: string;
 }
 
-const PROVIDERS: ProviderName[] = ['ollama', 'mock', 'anthropic'];
+const PROVIDERS: ProviderName[] = ['ollama', 'mock', 'anthropic', 'groq'];
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const production = env.NODE_ENV === 'production';
@@ -31,6 +39,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const provider = (env.AI_PROVIDER ?? 'ollama') as ProviderName;
   if (!PROVIDERS.includes(provider)) {
     throw new Error(`AI_PROVIDER must be one of ${PROVIDERS.join(', ')}; got "${provider}".`);
+  }
+
+  // Search by meaning is on by default with the Ollama brain, which already needs Ollama running.
+  const embeddings = (env.EMBEDDINGS ?? (provider === 'ollama' ? 'ollama' : 'off')) as EmbeddingsName;
+  if (embeddings !== 'ollama' && embeddings !== 'off') {
+    throw new Error(`EMBEDDINGS must be ollama or off; got "${embeddings}".`);
   }
 
   let sessionSecret = env.SESSION_SECRET ?? '';
@@ -42,13 +56,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   return {
     port: Number(env.PORT ?? 3000),
-    dbPath: env.DB_PATH ?? 'data/agent-platform.db',
+    database: env.DATABASE_URL ?? 'data/pglite',
     production,
     sessionSecret,
     allowSignup: env.ALLOW_SIGNUP !== 'false',
+    trustProxy: parseTrustProxy(env.TRUST_PROXY),
     provider,
     ollamaUrl: env.OLLAMA_URL ?? 'http://localhost:11434',
     ollamaModel: env.OLLAMA_MODEL ?? 'llama3.1',
     anthropicModel: env.ANTHROPIC_MODEL ?? 'claude-opus-5-5',
+    groqModel: env.GROQ_MODEL ?? 'llama-3.3-70b-versatile',
+    embeddings,
+    ollamaEmbedModel: env.OLLAMA_EMBED_MODEL ?? 'nomic-embed-text',
   };
+}
+
+/**
+ * TRUST_PROXY: `local` (or `true`) for a proxy on this machine, such as a
+ * Cloudflare Tunnel; `all` for a host whose proxy is the only way in, such as
+ * Render. Anything else trusts no proxy header.
+ */
+function parseTrustProxy(value: string | undefined): TrustProxy {
+  if (value === 'all') return 'all';
+  if (value === 'local' || value === 'true') return 'local';
+  return 'off';
 }
