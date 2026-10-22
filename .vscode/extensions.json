@@ -1,0 +1,4 @@
+{
+  // VS Code offers to install these when the folder is opened.
+  "recommendations": ["anthropic.claude-code"]
+}

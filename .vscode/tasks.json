@@ -1,0 +1,20 @@
+{
+  // Terminal → Run Task… lists these. "Check" is also the default test task (Cmd+Shift+P → "Run Test Task").
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Dev server",
+      "type": "npm",
+      "script": "dev",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Check (types + tests)",
+      "type": "npm",
+      "script": "check",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": ["$tsc"]
+    }
+  ]
+}

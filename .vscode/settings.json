@@ -1,0 +1,7 @@
+{
+  "editor.tabSize": 2,
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true,
+  "files.exclude": { "node_modules": true, "data": true },
+  "search.exclude": { "package-lock.json": true }
+}
